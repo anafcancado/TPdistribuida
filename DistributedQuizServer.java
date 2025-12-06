@@ -173,6 +173,7 @@ public class DistributedQuizServer extends JFrame {
         electButton.setBackground(new Color(255, 152, 0));
         electButton.setForeground(Color.WHITE);
         electButton.addActionListener(e -> startElection());
+        electButton.setVisible(false);
         
         buttonPanel.add(startGameButton);
         buttonPanel.add(electButton);

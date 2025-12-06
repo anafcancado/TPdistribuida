@@ -559,6 +559,45 @@ public class DistributedQuizServer extends JFrame {
         SwingUtilities.invokeLater(() -> {
             startGameButton.setEnabled(clients.size() > 0 && !gameActive);
         });
+        
+        // Retomar jogo se estava ativo quando assumimos coordenação
+        resumeGameAsNewCoordinator();
+    }
+    
+    private void resumeGameAsNewCoordinator() {
+        if (gameActive && currentQuestionIndex < questions.size()) {
+            log("=== RESUMINDO JOGO COMO NOVO COORDENADOR ===");
+            log("Questão atual: " + currentQuestionIndex);
+            
+            // Resetar respostas de todos os clientes para a questão atual
+            for (ClientHandler client : clients.values()) {
+                client.resetAnswer();
+            }
+            
+            // Reenviar a questão atual para todos os clientes
+            Question q = questions.get(currentQuestionIndex);
+            String questionData = "QUESTION|" + q.question + "|" + 
+                                  String.join("|", q.options);
+            
+            broadcastToClients(questionData);
+            log("Questão " + (currentQuestionIndex + 1) + " reenviada aos clientes");
+            
+            // Reiniciar o timer de 15 segundos para esta questão
+            new Timer().schedule(new TimerTask() {
+                @Override
+                public void run() {
+                    if (isCoordinator && gameActive) {
+                        log("Timer expirado - processando respostas da questão " + (currentQuestionIndex + 1));
+                        processQuestionEnd();
+                    }
+                }
+            }, 15000);
+            
+        } else if (gameActive && currentQuestionIndex >= questions.size()) {
+            // Se o jogo deveria ter terminado, terminar agora
+            log("Jogo deveria ter terminado. Finalizando...");
+            endGame();
+        }
     }
     
     // ==================== RICART-AGRAWALA ====================
@@ -678,13 +717,15 @@ public class DistributedQuizServer extends JFrame {
         broadcastToClients(questionData);
         replicateGameState("QUESTION", currentQuestionIndex + "");
         
-        log("Pergunta " + (currentQuestionIndex + 1) + " enviada");
+        log("Pergunta " + (currentQuestionIndex + 1) + " enviada aos " + clients.size() + " clientes");
         
         // Timer de 15 segundos
         new Timer().schedule(new TimerTask() {
             @Override
             public void run() {
-                processQuestionEnd();
+                if (isCoordinator) {
+                    processQuestionEnd();
+                }
             }
         }, 15000);
     }
@@ -958,6 +999,30 @@ public class DistributedQuizServer extends JFrame {
             switch (parts[0]) {
                 case "JOIN":
                     playerName = parts[1];
+                    
+                    // Verificar se já existe um cliente com esse nome conectado
+                    ClientHandler existingClient = null;
+                    for (ClientHandler client : clients.values()) {
+                        if (client != this && playerName.equals(client.getPlayerName())) {
+                            existingClient = client;
+                            break;
+                        }
+                    }
+                    
+                    // Se já existe, remover a conexão antiga
+                    if (existingClient != null) {
+                        String oldId = null;
+                        for (Map.Entry<String, ClientHandler> entry : clients.entrySet()) {
+                            if (entry.getValue() == existingClient) {
+                                oldId = entry.getKey();
+                                break;
+                            }
+                        }
+                        if (oldId != null) {
+                            clients.remove(oldId);
+                        }
+                    }
+                    
                     clients.put(clientId, this);
                     sendMessage("JOINED|" + playerName + "|" + serverId);
                     
@@ -968,10 +1033,11 @@ public class DistributedQuizServer extends JFrame {
                     } else {
                         globalScoreboard.put(playerName, 0);
                         log("Novo jogador: " + playerName);
+                        // Apenas replicar se for realmente novo
+                        replicateGameState("PLAYER_JOIN", playerName);
                     }
                     
                     updatePlayerCount();
-                    replicateGameState("PLAYER_JOIN", playerName);
                     
                     // Enviar estado atual se jogo ativo
                     if (gameActive && currentQuestionIndex < questions.size()) {

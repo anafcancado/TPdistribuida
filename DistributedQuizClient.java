@@ -302,6 +302,7 @@ public class DistributedQuizClient extends JFrame {
             boolean isCoord = Boolean.parseBoolean(parts[4]);
             
             if (isCoord) {
+                boolean coordinatorChanged = (coordinatorId != serverId);
                 coordinatorId = serverId;
                 coordinatorIP = from.getHostAddress();
                 coordinatorPort = clientPort;
@@ -317,20 +318,30 @@ public class DistributedQuizClient extends JFrame {
                     }
                 });
                 
-                // Se estávamos conectados mas a conexão caiu, reconectar
+                // Se estávamos conectados mas perdemos a conexão, reconectar
                 if (!connected && playerName != null && !playerName.isEmpty()) {
-                    log("Novo coordenador detectado. Reconectando...");
+                    log("Reconectando ao coordenador #" + coordinatorId + "...");
+                    reconnect();
+                }
+                // Se coordenador mudou e estamos conectados, reconectar ao novo
+                else if (connected && coordinatorChanged && currentServerId != coordinatorId) {
+                    log("Coordenador mudou de #" + currentServerId + " para #" + coordinatorId);
+                    SwingUtilities.invokeLater(() -> {
+                        statusLabel.setText("Mudança de coordenador detectada. Reconectando...");
+                        statusLabel.setForeground(Color.YELLOW);
+                    });
+                    // Fechar conexão atual e reconectar
+                    closeCurrentConnection();
                     reconnect();
                 }
             }
         } else if (parts[0].equals("COORDINATOR_ANNOUNCE")) {
             int newCoordId = Integer.parseInt(parts[1]);
             
-            // Se perdemos conexão com o coordenador anterior, tentar reconectar
-            if (coordinatorId != newCoordId && !connected && playerName != null) {
+            // Coordenador anunciado, aguardar heartbeat para obter detalhes
+            if (coordinatorId != newCoordId) {
                 log("Novo coordenador anunciado: #" + newCoordId);
                 coordinatorId = newCoordId;
-                // Aguardar próximo heartbeat para obter IP e porta
             }
         }
     }
@@ -407,6 +418,17 @@ public class DistributedQuizClient extends JFrame {
         }
     }
     
+    private void closeCurrentConnection() {
+        connected = false;
+        try {
+            if (tcpSocket != null && !tcpSocket.isClosed()) {
+                tcpSocket.close();
+            }
+        } catch (IOException e) {
+            log("Erro fechando conexão: " + e.getMessage());
+        }
+    }
+    
     private void startTCPListener() {
         new Thread(() -> {
             try {
@@ -416,24 +438,25 @@ public class DistributedQuizClient extends JFrame {
                 }
             } catch (IOException e) {
                 if (connected) {
-                    log("Conexão perdida com o servidor!");
+                    log("Conexão perdida com o servidor #" + currentServerId);
+                    connected = false;
+                    
                     SwingUtilities.invokeLater(() -> {
-                        connected = false;
                         statusLabel.setText("Conexão perdida. Procurando novo coordenador...");
                         statusLabel.setForeground(Color.RED);
-                        
-                        // Tentar reconectar após 2 segundos
-                        new Timer(2000, evt -> {
-                            ((Timer)evt.getSource()).stop();
-                            if (!connected && coordinatorIP != null) {
-                                reconnect();
-                            } else {
-                                showConnectionPanel();
-                                connectButton.setEnabled(coordinatorIP != null);
-                                playerNameField.setEnabled(false);
-                            }
-                        }).start();
                     });
+                    
+                    // Aguardar 1 segundo e tentar reconectar
+                    try {
+                        Thread.sleep(1000);
+                    } catch (InterruptedException ie) {
+                        // Ignore
+                    }
+                    
+                    if (!connected && coordinatorIP != null && coordinatorPort != -1) {
+                        log("Tentando reconectar automaticamente...");
+                        reconnect();
+                    }
                 }
             }
         }, "TCPListener").start();
@@ -441,6 +464,8 @@ public class DistributedQuizClient extends JFrame {
     
     private void processTCPMessage(String message) {
         String[] parts = message.split("\\|");
+        
+        log("Mensagem recebida: " + parts[0]);
         
         SwingUtilities.invokeLater(() -> {
             switch (parts[0]) {
@@ -460,6 +485,7 @@ public class DistributedQuizClient extends JFrame {
                     break;
                 
                 case "QUESTION":
+                    log("Nova pergunta recebida: " + parts[1]);
                     currentQuestion = parts[1];
                     currentOptions = Arrays.copyOfRange(parts, 2, 6);
                     displayQuestion();

@@ -24,6 +24,8 @@ import java.awt.GridLayout;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.Cursor;
 
 /**
  * Servidor Distribuído de Quiz Competitivo com Multicast e Tolerância a Falhas
@@ -149,55 +151,107 @@ public class DistributedQuizServer extends JFrame {
                 System.exit(0);
             }
         });
-        setLayout(new BorderLayout(10, 10));
+        setLayout(new BorderLayout(0, 0));
+        setMinimumSize(new Dimension(900, 600));
         
-        // Painel superior
-        JPanel topPanel = new JPanel(new GridLayout(6, 1, 5, 5));
-        topPanel.setBorder(BorderFactory.createTitledBorder("Status do Servidor"));
-        topPanel.setBackground(new Color(240, 240, 240));
+        // Painel superior com informações do servidor
+        JPanel topPanel = new JPanel(new BorderLayout());
+        topPanel.setBackground(new Color(250, 250, 250));
+        topPanel.setBorder(BorderFactory.createEmptyBorder(15, 20, 15, 20));
+        
+        // Título e info principal
+        JPanel headerPanel = new JPanel(new BorderLayout(0, 8));
+        headerPanel.setBackground(new Color(250, 250, 250));
+        
+        JLabel titleLabel = new JLabel("Servidor #" + serverId + " - Sistema Distribuído");
+        titleLabel.setFont(new Font("SansSerif", Font.BOLD, 20));
+        titleLabel.setForeground(new Color(33, 33, 33));
+        
+        JPanel statusGrid = new JPanel(new GridLayout(2, 3, 15, 8));
+        statusGrid.setBackground(new Color(250, 250, 250));
         
         statusLabel = new JLabel("Status: Iniciando...");
-        coordLabel = new JLabel("Coordenador: Desconhecido");
-        playersLabel = new JLabel("Jogadores: 0");
-        serversLabel = new JLabel("Servidores Ativos: 0");
-        clockLabel = new JLabel("Relógio Lamport: 0");
+        statusLabel.setFont(new Font("SansSerif", Font.PLAIN, 13));
+        statusLabel.setForeground(new Color(97, 97, 97));
         
-        JPanel buttonPanel = new JPanel(new FlowLayout());
+        coordLabel = new JLabel("Coordenador: Desconhecido");
+        coordLabel.setFont(new Font("SansSerif", Font.PLAIN, 13));
+        coordLabel.setForeground(new Color(97, 97, 97));
+        
+        serversLabel = new JLabel("Servidores Ativos: 0");
+        serversLabel.setFont(new Font("SansSerif", Font.PLAIN, 13));
+        serversLabel.setForeground(new Color(97, 97, 97));
+        
+        playersLabel = new JLabel("Jogadores: 0");
+        playersLabel.setFont(new Font("SansSerif", Font.PLAIN, 13));
+        playersLabel.setForeground(new Color(97, 97, 97));
+        
+        clockLabel = new JLabel("Relógio Lamport: 0");
+        clockLabel.setFont(new Font("SansSerif", Font.PLAIN, 13));
+        clockLabel.setForeground(new Color(97, 97, 97));
+        
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
+        buttonPanel.setBackground(new Color(250, 250, 250));
+        
         startGameButton = new JButton("Iniciar Jogo");
         startGameButton.setEnabled(false);
         startGameButton.setBackground(new Color(76, 175, 80));
         startGameButton.setForeground(Color.WHITE);
+        startGameButton.setFont(new Font("SansSerif", Font.BOLD, 13));
+        startGameButton.setBorderPainted(false);
+        startGameButton.setFocusPainted(false);
+        startGameButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        startGameButton.setPreferredSize(new Dimension(130, 35));
         startGameButton.addActionListener(e -> initiateGameStart());
         
         electButton = new JButton("Forçar Eleição");
         electButton.setBackground(new Color(255, 152, 0));
         electButton.setForeground(Color.WHITE);
+        electButton.setFont(new Font("SansSerif", Font.BOLD, 13));
+        electButton.setBorderPainted(false);
+        electButton.setFocusPainted(false);
+        electButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        electButton.setPreferredSize(new Dimension(130, 35));
         electButton.addActionListener(e -> startElection());
         electButton.setVisible(false);
         
         buttonPanel.add(startGameButton);
         buttonPanel.add(electButton);
         
-        topPanel.add(statusLabel);
-        topPanel.add(coordLabel);
-        topPanel.add(serversLabel);
-        topPanel.add(playersLabel);
-        topPanel.add(clockLabel);
-        topPanel.add(buttonPanel);
+        statusGrid.add(statusLabel);
+        statusGrid.add(coordLabel);
+        statusGrid.add(serversLabel);
+        statusGrid.add(playersLabel);
+        statusGrid.add(clockLabel);
+        statusGrid.add(buttonPanel);
         
-        // Área de log
-        logArea = new JTextArea(25, 70);
+        headerPanel.add(titleLabel, BorderLayout.NORTH);
+        headerPanel.add(statusGrid, BorderLayout.CENTER);
+        
+        topPanel.add(headerPanel, BorderLayout.CENTER);
+        
+        // Área de log com scroll responsivo
+        logArea = new JTextArea();
         logArea.setEditable(false);
-        logArea.setFont(new Font("Monospaced", Font.PLAIN, 11));
+        logArea.setFont(new Font("Consolas", Font.PLAIN, 12));
         logArea.setBackground(new Color(30, 30, 30));
         logArea.setForeground(new Color(0, 255, 0));
+        logArea.setLineWrap(false);
+        logArea.setWrapStyleWord(false);
+        logArea.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        
         JScrollPane scrollPane = new JScrollPane(logArea);
-        scrollPane.setBorder(BorderFactory.createTitledBorder("Log do Servidor (Multicast Ativo)"));
+        scrollPane.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createEmptyBorder(0, 15, 15, 15),
+            BorderFactory.createLineBorder(new Color(189, 189, 189), 1)
+        ));
+        scrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
+        scrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
         
         add(topPanel, BorderLayout.NORTH);
         add(scrollPane, BorderLayout.CENTER);
         
-        pack();
+        setSize(1000, 700);
         setLocationRelativeTo(null);
         setVisible(true);
         

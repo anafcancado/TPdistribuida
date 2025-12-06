@@ -6,16 +6,10 @@ import java.awt.event.*;
 import java.util.Arrays;
 
 /**
- * Cliente Inteligente para o Sistema de Quiz Distribuído
- * - Descoberta automática de servidores via Multicast
- * - Reconexão automática em caso de falha
- * - Mantém estado do jogador (nome e pontuação)
+ * Cliente para o Sistema de Quiz Distribuído
+ * Conecta-se a qualquer servidor disponível no cluster
  */
 public class DistributedQuizClient extends JFrame {
-    // Multicast Configuration
-    private static final String MULTICAST_ADDRESS = "230.0.0.1";
-    private static final int MULTICAST_PORT = 4446;
-    
     private Socket tcpSocket;
     private BufferedReader tcpIn;
     private PrintWriter tcpOut;
@@ -23,24 +17,14 @@ public class DistributedQuizClient extends JFrame {
     private String serverIP;
     private int serverPort;
     private String playerName;
-    private int currentScore = 0;
     private boolean connected = false;
-    private volatile boolean running = true;
-    private int currentServerId = -1;
-    
-    // Multicast discovery
-    private MulticastSocket multicastSocket;
-    private InetAddress multicastGroup;
-    private volatile int coordinatorId = -1;
-    private volatile String coordinatorIP = null;
-    private volatile int coordinatorPort = -1;
     
     // GUI Components
-    private JLabel statusLabel;
-    private JLabel connectionLabel;
-    private JLabel scoreLabel;
+    private JTextField serverIPField;
+    private JTextField serverPortField;
     private JTextField playerNameField;
     private JButton connectButton;
+    private JLabel statusLabel;
     private JLabel questionLabel;
     private JButton[] answerButtons;
     private JTextArea scoreboardArea;
@@ -61,19 +45,11 @@ public class DistributedQuizClient extends JFrame {
     
     public DistributedQuizClient() {
         setupGUI();
-        startMulticastDiscovery();
     }
     
     private void setupGUI() {
-        setTitle("Quiz Client - Sistema Distribuído (Auto-Discovery)");
-        setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
-        addWindowListener(new WindowAdapter() {
-            @Override
-            public void windowClosing(WindowEvent e) {
-                shutdown();
-                System.exit(0);
-            }
-        });
+        setTitle("Quiz Client - Sistema Distribuído");
+        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLayout(new CardLayout());
         
         setupConnectionPanel();
@@ -99,30 +75,25 @@ public class DistributedQuizClient extends JFrame {
         titleLabel.setFont(new Font("Arial", Font.BOLD, 24));
         titleLabel.setForeground(Color.WHITE);
         
-        statusLabel = new JLabel("Procurando servidores via Multicast...");
-        statusLabel.setForeground(Color.YELLOW);
-        statusLabel.setFont(new Font("Arial", Font.BOLD, 14));
+        JLabel ipLabel = new JLabel("IP do Servidor:");
+        ipLabel.setForeground(Color.WHITE);
+        serverIPField = new JTextField("localhost", 15);
         
-        connectionLabel = new JLabel("Aguardando descoberta...");
-        connectionLabel.setForeground(Color.WHITE);
+        JLabel portLabel = new JLabel("Porta do Servidor:");
+        portLabel.setForeground(Color.WHITE);
+        serverPortField = new JTextField("5001", 10);
         
         JLabel nameLabel = new JLabel("Seu Nome:");
         nameLabel.setForeground(Color.WHITE);
-        nameLabel.setFont(new Font("Arial", Font.BOLD, 14));
+        playerNameField = new JTextField(15);
         
-        playerNameField = new JTextField(20);
-        playerNameField.setFont(new Font("Arial", Font.PLAIN, 14));
-        
-        connectButton = new JButton("Conectar ao Coordenador");
-        connectButton.setEnabled(false);
+        connectButton = new JButton("Conectar");
         connectButton.setBackground(new Color(76, 175, 80));
         connectButton.setForeground(Color.WHITE);
-        connectButton.setFont(new Font("Arial", Font.BOLD, 14));
-        connectButton.addActionListener(e -> connectToCoordinator());
+        connectButton.addActionListener(e -> connectToServer());
         
-        scoreLabel = new JLabel("Pontuação: 0");
-        scoreLabel.setForeground(Color.WHITE);
-        scoreLabel.setFont(new Font("Arial", Font.BOLD, 12));
+        statusLabel = new JLabel("Digite o IP, porta e seu nome");
+        statusLabel.setForeground(Color.WHITE);
         
         gbc.insets = new Insets(10, 10, 10, 10);
         gbc.gridx = 0;
@@ -130,14 +101,21 @@ public class DistributedQuizClient extends JFrame {
         gbc.gridwidth = 2;
         connectionPanel.add(titleLabel, gbc);
         
-        gbc.gridy = 1;
-        connectionPanel.add(statusLabel, gbc);
-        
-        gbc.gridy = 2;
-        connectionPanel.add(connectionLabel, gbc);
-        
-        gbc.gridy = 3;
         gbc.gridwidth = 1;
+        gbc.gridx = 0;
+        gbc.gridy = 1;
+        connectionPanel.add(ipLabel, gbc);
+        gbc.gridx = 1;
+        connectionPanel.add(serverIPField, gbc);
+        
+        gbc.gridx = 0;
+        gbc.gridy = 2;
+        connectionPanel.add(portLabel, gbc);
+        gbc.gridx = 1;
+        connectionPanel.add(serverPortField, gbc);
+        
+        gbc.gridx = 0;
+        gbc.gridy = 3;
         connectionPanel.add(nameLabel, gbc);
         gbc.gridx = 1;
         connectionPanel.add(playerNameField, gbc);
@@ -148,28 +126,24 @@ public class DistributedQuizClient extends JFrame {
         connectionPanel.add(connectButton, gbc);
         
         gbc.gridy = 5;
-        connectionPanel.add(scoreLabel, gbc);
+        connectionPanel.add(statusLabel, gbc);
         
         // Instruções
         JTextArea instructions = new JTextArea(
-            "INSTRUÇÕES (Modo Automático):\n\n" +
-            "1. O sistema está procurando servidores automaticamente\n" +
-            "2. Quando um coordenador for encontrado, o botão será habilitado\n" +
-            "3. Digite seu nome e clique em 'Conectar ao Coordenador'\n" +
-            "4. Se a conexão cair, o sistema reconectará automaticamente\n" +
-            "5. Sua pontuação será mantida na reconexão"
+            "INSTRUÇÕES:\n" +
+            "1. Digite o IP e porta de qualquer servidor do cluster\n" +
+            "   (Exemplo: localhost:5001, localhost:5002, etc.)\n" +
+            "2. Digite seu nome\n" +
+            "3. Clique em Conectar\n" +
+            "4. Aguarde o coordenador iniciar o jogo"
         );
         instructions.setEditable(false);
         instructions.setBackground(new Color(46, 125, 50));
         instructions.setForeground(Color.WHITE);
         instructions.setFont(new Font("Arial", Font.PLAIN, 11));
-        instructions.setBorder(BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(Color.WHITE, 1),
-            BorderFactory.createEmptyBorder(10, 10, 10, 10)
-        ));
+        instructions.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
         
         gbc.gridy = 6;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
         connectionPanel.add(instructions, gbc);
     }
     
@@ -178,30 +152,13 @@ public class DistributedQuizClient extends JFrame {
         gamePanel.setBackground(new Color(33, 150, 243));
         
         // Topo
-        JPanel topPanel = new JPanel(new BorderLayout());
+        JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
         topPanel.setBackground(new Color(25, 118, 210));
         
-        JLabel titleLabel = new JLabel("Quiz em Andamento", SwingConstants.CENTER);
+        JLabel titleLabel = new JLabel("Quiz em Andamento");
         titleLabel.setFont(new Font("Arial", Font.BOLD, 18));
         titleLabel.setForeground(Color.WHITE);
-        
-        JPanel infoPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
-        infoPanel.setBackground(new Color(25, 118, 210));
-        
-        JLabel serverInfoLabel = new JLabel("Servidor Atual: ");
-        serverInfoLabel.setForeground(Color.WHITE);
-        serverInfoLabel.setFont(new Font("Arial", Font.PLAIN, 12));
-        
-        JLabel serverIdLabel = new JLabel("#?");
-        serverIdLabel.setForeground(Color.YELLOW);
-        serverIdLabel.setFont(new Font("Arial", Font.BOLD, 12));
-        this.connectionLabel = serverIdLabel;
-        
-        infoPanel.add(serverInfoLabel);
-        infoPanel.add(serverIdLabel);
-        
-        topPanel.add(titleLabel, BorderLayout.CENTER);
-        topPanel.add(infoPanel, BorderLayout.SOUTH);
+        topPanel.add(titleLabel);
         
         // Centro - Pergunta e Respostas
         JPanel centerPanel = new JPanel(new BorderLayout());
@@ -260,108 +217,29 @@ public class DistributedQuizClient extends JFrame {
         gamePanel.add(scoreScrollPane, BorderLayout.EAST);
     }
     
-    // ==================== MULTICAST DISCOVERY ====================
-    
-    private void startMulticastDiscovery() {
-        new Thread(() -> {
-            try {
-                multicastGroup = InetAddress.getByName(MULTICAST_ADDRESS);
-                multicastSocket = new MulticastSocket(MULTICAST_PORT);
-                
-                // Join multicast group
-                NetworkInterface netIf = NetworkInterface.getByInetAddress(InetAddress.getLocalHost());
-                if (netIf == null) {
-                    netIf = NetworkInterface.getNetworkInterfaces().nextElement();
-                }
-                
-                multicastSocket.joinGroup(new InetSocketAddress(multicastGroup, MULTICAST_PORT), netIf);
-                log("Escutando grupo Multicast: " + MULTICAST_ADDRESS);
-                
-                byte[] buffer = new byte[1024];
-                while (running) {
-                    DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
-                    multicastSocket.receive(packet);
-                    
-                    String message = new String(packet.getData(), 0, packet.getLength());
-                    processMulticastMessage(message, packet.getAddress());
-                }
-            } catch (IOException e) {
-                if (running) {
-                    log("Erro no Multicast: " + e.getMessage());
-                }
-            }
-        }, "MulticastListener").start();
-    }
-    
-    private void processMulticastMessage(String message, InetAddress from) {
-        String[] parts = message.split("\\|");
-        
-        if (parts[0].equals("HEARTBEAT")) {
-            int serverId = Integer.parseInt(parts[1]);
-            int clientPort = Integer.parseInt(parts[2]);
-            boolean isCoord = Boolean.parseBoolean(parts[4]);
-            
-            if (isCoord) {
-                coordinatorId = serverId;
-                coordinatorIP = from.getHostAddress();
-                coordinatorPort = clientPort;
-                
-                SwingUtilities.invokeLater(() -> {
-                    statusLabel.setText("Coordenador encontrado!");
-                    statusLabel.setForeground(Color.GREEN);
-                    connectionLabel.setText("Servidor #" + coordinatorId + " em " + 
-                        coordinatorIP + ":" + coordinatorPort);
-                    
-                    if (!connected && playerNameField.getText().trim().isEmpty()) {
-                        connectButton.setEnabled(true);
-                    }
-                });
-                
-                // Se estávamos conectados mas a conexão caiu, reconectar
-                if (!connected && playerName != null && !playerName.isEmpty()) {
-                    log("Novo coordenador detectado. Reconectando...");
-                    reconnect();
-                }
-            }
-        } else if (parts[0].equals("COORDINATOR_ANNOUNCE")) {
-            int newCoordId = Integer.parseInt(parts[1]);
-            
-            // Se perdemos conexão com o coordenador anterior, tentar reconectar
-            if (coordinatorId != newCoordId && !connected && playerName != null) {
-                log("Novo coordenador anunciado: #" + newCoordId);
-                coordinatorId = newCoordId;
-                // Aguardar próximo heartbeat para obter IP e porta
-            }
-        }
-    }
-    
-    // ==================== CONNECTION MANAGEMENT ====================
-    
-    private void connectToCoordinator() {
+    private void connectToServer() {
+        serverIP = serverIPField.getText().trim();
+        String portText = serverPortField.getText().trim();
         playerName = playerNameField.getText().trim();
         
-        if (playerName.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "Digite seu nome!");
+        if (serverIP.isEmpty() || portText.isEmpty() || playerName.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Preencha todos os campos!");
             return;
         }
         
-        if (coordinatorIP == null || coordinatorPort == -1) {
-            JOptionPane.showMessageDialog(this, "Nenhum coordenador disponível!");
+        try {
+            serverPort = Integer.parseInt(portText);
+        } catch (NumberFormatException e) {
+            JOptionPane.showMessageDialog(this, "Porta inválida!");
             return;
         }
         
         connectButton.setEnabled(false);
-        playerNameField.setEnabled(false);
+        statusLabel.setText("Conectando...");
         
-        connectToServer(coordinatorIP, coordinatorPort);
-    }
-    
-    private void connectToServer(String ip, int port) {
         new Thread(() -> {
             try {
-                log("Conectando a " + ip + ":" + port);
-                
-                tcpSocket = new Socket(ip, port);
+                tcpSocket = new Socket(serverIP, serverPort);
                 tcpIn = new BufferedReader(new InputStreamReader(tcpSocket.getInputStream()));
                 tcpOut = new PrintWriter(tcpSocket.getOutputStream(), true);
                 
@@ -370,8 +248,8 @@ public class DistributedQuizClient extends JFrame {
                 
                 SwingUtilities.invokeLater(() -> {
                     connected = true;
-                    statusLabel.setText("Conectado!");
-                    statusLabel.setForeground(Color.GREEN);
+                    showGamePanel();
+                    statusLabel.setText("Conectado! Aguardando o jogo começar...");
                 });
                 
                 // Thread para escutar mensagens TCP
@@ -379,32 +257,14 @@ public class DistributedQuizClient extends JFrame {
                 
             } catch (IOException e) {
                 SwingUtilities.invokeLater(() -> {
-                    log("Erro ao conectar: " + e.getMessage());
-                    statusLabel.setText("Erro na conexão. Procurando outro servidor...");
-                    statusLabel.setForeground(Color.RED);
-                    connected = false;
-                    
-                    // Tentar reconectar após 3 segundos
-                    new Timer(3000, evt -> {
-                        ((Timer)evt.getSource()).stop();
-                        if (!connected && coordinatorIP != null) {
-                            reconnect();
-                        }
-                    }).start();
+                    JOptionPane.showMessageDialog(this, 
+                        "Erro ao conectar: " + e.getMessage() + 
+                        "\nVerifique se o servidor está rodando.");
+                    connectButton.setEnabled(true);
+                    statusLabel.setText("Erro na conexão");
                 });
             }
         }).start();
-    }
-    
-    private void reconnect() {
-        SwingUtilities.invokeLater(() -> {
-            statusLabel.setText("Reconectando ao servidor #" + coordinatorId + "...");
-            statusLabel.setForeground(Color.YELLOW);
-        });
-        
-        if (coordinatorIP != null && coordinatorPort != -1) {
-            connectToServer(coordinatorIP, coordinatorPort);
-        }
     }
     
     private void startTCPListener() {
@@ -416,27 +276,17 @@ public class DistributedQuizClient extends JFrame {
                 }
             } catch (IOException e) {
                 if (connected) {
-                    log("Conexão perdida com o servidor!");
                     SwingUtilities.invokeLater(() -> {
+                        JOptionPane.showMessageDialog(this, 
+                            "Conexão perdida com o servidor!\n" +
+                            "O servidor pode ter falhado ou sido desconectado.");
+                        showConnectionPanel();
                         connected = false;
-                        statusLabel.setText("Conexão perdida. Procurando novo coordenador...");
-                        statusLabel.setForeground(Color.RED);
-                        
-                        // Tentar reconectar após 2 segundos
-                        new Timer(2000, evt -> {
-                            ((Timer)evt.getSource()).stop();
-                            if (!connected && coordinatorIP != null) {
-                                reconnect();
-                            } else {
-                                showConnectionPanel();
-                                connectButton.setEnabled(coordinatorIP != null);
-                                playerNameField.setEnabled(false);
-                            }
-                        }).start();
+                        connectButton.setEnabled(true);
                     });
                 }
             }
-        }, "TCPListener").start();
+        }).start();
     }
     
     private void processTCPMessage(String message) {
@@ -445,18 +295,10 @@ public class DistributedQuizClient extends JFrame {
         SwingUtilities.invokeLater(() -> {
             switch (parts[0]) {
                 case "JOINED":
-                    currentServerId = Integer.parseInt(parts[2]);
-                    log("Conectado ao servidor #" + currentServerId);
-                    
-                    showGamePanel();
                     questionLabel.setText("<html><div style='text-align: center; padding: 20px;'>" +
                         "Bem-vindo, " + parts[1] + "!<br><br>" +
-                        "Conectado ao Servidor #" + currentServerId + "<br>" +
-                        "Aguardando o jogo começar...</div></html>");
-                    
-                    if (connectionLabel != null) {
-                        connectionLabel.setText("#" + currentServerId);
-                    }
+                        "Você está conectado ao cluster distribuído.<br>" +
+                        "Aguardando o coordenador iniciar o jogo...</div></html>");
                     break;
                 
                 case "QUESTION":
@@ -501,7 +343,7 @@ public class DistributedQuizClient extends JFrame {
     }
     
     private void selectAnswer(int answerIndex) {
-        if (!canAnswer || !connected) return;
+        if (!canAnswer) return;
         
         // Desabilitar todos os botões após responder
         canAnswer = false;
@@ -513,9 +355,7 @@ public class DistributedQuizClient extends JFrame {
         answerButtons[answerIndex].setBackground(answerButtons[answerIndex].getBackground().darker());
         
         // Enviar resposta via TCP
-        if (tcpOut != null) {
-            tcpOut.println("ANSWER|" + answerIndex);
-        }
+        tcpOut.println("ANSWER|" + answerIndex);
         
         questionLabel.setText("<html><div style='text-align: center; padding: 20px;'>" +
             "Resposta enviada! ✓<br><br>" +
@@ -535,10 +375,8 @@ public class DistributedQuizClient extends JFrame {
                 String name = playerData[0];
                 String points = playerData[1];
                 
-                // Atualizar pontuação própria
+                // Destacar o próprio jogador
                 if (name.equals(playerName)) {
-                    currentScore = Integer.parseInt(points);
-                    scoreLabel.setText("Pontuação: " + currentScore);
                     sb.append("► ");
                 } else {
                     sb.append("  ");
@@ -558,36 +396,13 @@ public class DistributedQuizClient extends JFrame {
     private void showConnectionPanel() {
         CardLayout cl = (CardLayout) getContentPane().getLayout();
         cl.show(getContentPane(), "CONNECTION");
-        setTitle("Quiz Client - Procurando Servidores...");
+        setTitle("Quiz Client - Conectar ao Servidor");
     }
     
     private void showGamePanel() {
         CardLayout cl = (CardLayout) getContentPane().getLayout();
         cl.show(getContentPane(), "GAME");
-        setTitle("Quiz Client - " + playerName + " [Servidor #" + currentServerId + "]");
-    }
-    
-    private void log(String message) {
-        System.out.println("[Cliente] " + message);
-    }
-    
-    private void shutdown() {
-        running = false;
-        
-        try {
-            if (multicastSocket != null) {
-                NetworkInterface netIf = NetworkInterface.getByInetAddress(InetAddress.getLocalHost());
-                if (netIf == null) {
-                    netIf = NetworkInterface.getNetworkInterfaces().nextElement();
-                }
-                multicastSocket.leaveGroup(
-                    new InetSocketAddress(multicastGroup, MULTICAST_PORT), netIf);
-                multicastSocket.close();
-            }
-            if (tcpSocket != null) tcpSocket.close();
-        } catch (IOException e) {
-            // Ignore
-        }
+        setTitle("Quiz Client - " + playerName + " conectado");
     }
     
     public static void main(String[] args) {

@@ -23,28 +23,40 @@ import java.awt.BorderLayout;
 import java.awt.GridLayout;
 import java.awt.FlowLayout;
 import java.awt.Font;
+import java.awt.Color;
 
 /**
- * Servidor Distribuído de Quiz Competitivo
- * Implementa: Eleição Bully, Ricart-Agrawala, Consistência de Réplicas, Relógios de Lamport
+ * Servidor Distribuído de Quiz Competitivo com Multicast e Tolerância a Falhas
+ * - Descoberta automática de servidores via Multicast
+ * - Heartbeat para detecção de falhas
+ * - Eleição automática de coordenador
+ * - Replicação de estado
  */
 public class DistributedQuizServer extends JFrame {
+    // Multicast Configuration
+    private static final String MULTICAST_ADDRESS = "230.0.0.1";
+    private static final int MULTICAST_PORT = 4446;
+    private static final int HEARTBEAT_INTERVAL = 2000; // 2 segundos
+    private static final int HEARTBEAT_TIMEOUT = 6000; // 6 segundos (3 heartbeats perdidos)
+    
     // Configurações de rede
     private final int serverId;
     private final int clientPort;
     private final int serverPort;
-    private final Map<Integer, String> serverAddresses = new ConcurrentHashMap<>();
+    private final Map<Integer, ServerInfo> activeServers = new ConcurrentHashMap<>();
     
     // Servidores TCP/UDP
     private ServerSocket clientListener;
     private ServerSocket serverListener;
-    private DatagramSocket udpSocket;
+    private MulticastSocket multicastSocket;
+    private InetAddress multicastGroup;
     
     // Estado do servidor
-    private boolean isCoordinator = false;
-    private int coordinatorId = -1;
+    private volatile boolean isCoordinator = false;
+    private volatile int coordinatorId = -1;
     private int lamportClock = 0;
     private final Object clockLock = new Object();
+    private volatile boolean running = true;
     
     // Clientes e outros servidores
     private final Map<String, ClientHandler> clients = new ConcurrentHashMap<>();
@@ -52,13 +64,13 @@ public class DistributedQuizServer extends JFrame {
     
     // Estado do jogo (replicado)
     private final Map<String, Integer> globalScoreboard = new ConcurrentHashMap<>();
-    private java.util.List<Question> questions = new ArrayList<>();
-    private int currentQuestionIndex = 0;
-    private boolean gameActive = false;
+    private List<Question> questions = new ArrayList<>();
+    private volatile int currentQuestionIndex = 0;
+    private volatile boolean gameActive = false;
     
     // Ricart-Agrawala para exclusão mútua
     private final Queue<MutexRequest> requestQueue = new PriorityQueue<>();
-    private boolean requestingCS = false;
+    private volatile boolean requestingCS = false;
     private int requestTimestamp = 0;
     private final Set<Integer> replyReceived = ConcurrentHashMap.newKeySet();
     
@@ -68,8 +80,14 @@ public class DistributedQuizServer extends JFrame {
     private JLabel coordLabel;
     private JLabel playersLabel;
     private JLabel clockLabel;
+    private JLabel serversLabel;
     private JButton startGameButton;
     private JButton electButton;
+    
+    // Heartbeat tracking
+    private final Map<Integer, Long> lastHeartbeat = new ConcurrentHashMap<>();
+    private Timer heartbeatTimer;
+    private Timer failureDetectionTimer;
     
     public DistributedQuizServer(int serverId, int clientPort, int serverPort) {
         this.serverId = serverId;
@@ -79,6 +97,20 @@ public class DistributedQuizServer extends JFrame {
         initializeQuestions();
         setupGUI();
         startServer();
+        startMulticastDiscovery();
+        startHeartbeat();
+        startFailureDetection();
+        
+        // Iniciar eleição após 5 segundos se não houver coordenador
+        new Timer().schedule(new TimerTask() {
+            @Override
+            public void run() {
+                if (coordinatorId == -1) {
+                    log("Nenhum coordenador detectado. Iniciando eleição...");
+                    startElection();
+                }
+            }
+        }, 5000);
     }
     
     private void initializeQuestions() {
@@ -95,25 +127,38 @@ public class DistributedQuizServer extends JFrame {
     }
     
     private void setupGUI() {
-        setTitle("Servidor Distribuído #" + serverId + " - Porta Clientes: " + clientPort);
-        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setTitle("Servidor Distribuído #" + serverId + " [MULTICAST]");
+        setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+        addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosing(java.awt.event.WindowEvent e) {
+                shutdown();
+                System.exit(0);
+            }
+        });
         setLayout(new BorderLayout(10, 10));
         
         // Painel superior
-        JPanel topPanel = new JPanel(new GridLayout(5, 1, 5, 5));
+        JPanel topPanel = new JPanel(new GridLayout(6, 1, 5, 5));
         topPanel.setBorder(BorderFactory.createTitledBorder("Status do Servidor"));
+        topPanel.setBackground(new Color(240, 240, 240));
         
         statusLabel = new JLabel("Status: Iniciando...");
         coordLabel = new JLabel("Coordenador: Desconhecido");
         playersLabel = new JLabel("Jogadores: 0");
+        serversLabel = new JLabel("Servidores Ativos: 0");
         clockLabel = new JLabel("Relógio Lamport: 0");
         
         JPanel buttonPanel = new JPanel(new FlowLayout());
         startGameButton = new JButton("Iniciar Jogo");
         startGameButton.setEnabled(false);
+        startGameButton.setBackground(new Color(76, 175, 80));
+        startGameButton.setForeground(Color.WHITE);
         startGameButton.addActionListener(e -> initiateGameStart());
         
         electButton = new JButton("Forçar Eleição");
+        electButton.setBackground(new Color(255, 152, 0));
+        electButton.setForeground(Color.WHITE);
         electButton.addActionListener(e -> startElection());
         
         buttonPanel.add(startGameButton);
@@ -121,16 +166,19 @@ public class DistributedQuizServer extends JFrame {
         
         topPanel.add(statusLabel);
         topPanel.add(coordLabel);
+        topPanel.add(serversLabel);
         topPanel.add(playersLabel);
         topPanel.add(clockLabel);
         topPanel.add(buttonPanel);
         
         // Área de log
-        logArea = new JTextArea(25, 60);
+        logArea = new JTextArea(25, 70);
         logArea.setEditable(false);
         logArea.setFont(new Font("Monospaced", Font.PLAIN, 11));
+        logArea.setBackground(new Color(30, 30, 30));
+        logArea.setForeground(new Color(0, 255, 0));
         JScrollPane scrollPane = new JScrollPane(logArea);
-        scrollPane.setBorder(BorderFactory.createTitledBorder("Log do Servidor"));
+        scrollPane.setBorder(BorderFactory.createTitledBorder("Log do Servidor (Multicast Ativo)"));
         
         add(topPanel, BorderLayout.NORTH);
         add(scrollPane, BorderLayout.CENTER);
@@ -139,8 +187,233 @@ public class DistributedQuizServer extends JFrame {
         setLocationRelativeTo(null);
         setVisible(true);
         
-        log("Servidor #" + serverId + " iniciado!");
+        log("Servidor #" + serverId + " iniciado com Multicast!");
+        log("Multicast: " + MULTICAST_ADDRESS + ":" + MULTICAST_PORT);
     }
+    
+    // ==================== MULTICAST DISCOVERY ====================
+    
+    private void startMulticastDiscovery() {
+        new Thread(() -> {
+            try {
+                multicastGroup = InetAddress.getByName(MULTICAST_ADDRESS);
+                multicastSocket = new MulticastSocket(MULTICAST_PORT);
+                
+                // Join multicast group
+                NetworkInterface netIf = NetworkInterface.getByInetAddress(InetAddress.getLocalHost());
+                if (netIf == null) {
+                    netIf = NetworkInterface.getNetworkInterfaces().nextElement();
+                }
+                
+                multicastSocket.joinGroup(new InetSocketAddress(multicastGroup, MULTICAST_PORT), netIf);
+                log("Entrou no grupo Multicast: " + MULTICAST_ADDRESS);
+                
+                // Listen for multicast messages
+                byte[] buffer = new byte[1024];
+                while (running) {
+                    DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+                    multicastSocket.receive(packet);
+                    
+                    String message = new String(packet.getData(), 0, packet.getLength());
+                    processMulticastMessage(message, packet.getAddress());
+                }
+            } catch (IOException e) {
+                if (running) {
+                    log("Erro no Multicast: " + e.getMessage());
+                }
+            }
+        }, "MulticastListener").start();
+        
+        statusLabel.setText("Status: Escutando Multicast");
+    }
+    
+    private void startHeartbeat() {
+        heartbeatTimer = new Timer(true);
+        heartbeatTimer.scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+                sendHeartbeat();
+            }
+        }, 1000, HEARTBEAT_INTERVAL);
+    }
+    
+    private void sendHeartbeat() {
+        try {
+            incrementClock();
+            String message = String.format("HEARTBEAT|%d|%d|%d|%b|%d",
+                serverId, clientPort, serverPort, isCoordinator, lamportClock);
+            
+            byte[] buffer = message.getBytes();
+            DatagramPacket packet = new DatagramPacket(
+                buffer, buffer.length, multicastGroup, MULTICAST_PORT);
+            
+            multicastSocket.send(packet);
+            
+        } catch (IOException e) {
+            if (running) {
+                log("Erro enviando heartbeat: " + e.getMessage());
+            }
+        }
+    }
+    
+    private void startFailureDetection() {
+        failureDetectionTimer = new Timer(true);
+        failureDetectionTimer.scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+                detectFailures();
+            }
+        }, HEARTBEAT_TIMEOUT, HEARTBEAT_INTERVAL);
+    }
+    
+    private void detectFailures() {
+        long now = System.currentTimeMillis();
+        List<Integer> failedServers = new ArrayList<>();
+        
+        for (Map.Entry<Integer, Long> entry : lastHeartbeat.entrySet()) {
+            if (now - entry.getValue() > HEARTBEAT_TIMEOUT) {
+                failedServers.add(entry.getKey());
+            }
+        }
+        
+        for (Integer failedId : failedServers) {
+            handleServerFailure(failedId);
+        }
+    }
+    
+    private void handleServerFailure(int failedId) {
+        log("FALHA DETECTADA: Servidor #" + failedId + " não responde!");
+        
+        lastHeartbeat.remove(failedId);
+        activeServers.remove(failedId);
+        ServerConnection conn = servers.remove(failedId);
+        if (conn != null) {
+            conn.close();
+        }
+        
+        updateServerCount();
+        
+        // Se o coordenador falhou, iniciar eleição
+        if (failedId == coordinatorId) {
+            log("COORDENADOR FALHOU! Iniciando eleição automática...");
+            coordinatorId = -1;
+            isCoordinator = false;
+            updateCoordLabel();
+            
+            // Aguardar um pouco para garantir que todos detectaram
+            new Thread(() -> {
+                try {
+                    Thread.sleep(1000);
+                    startElection();
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }).start();
+        }
+    }
+    
+    private void processMulticastMessage(String message, InetAddress from) {
+        String[] parts = message.split("\\|");
+        
+        if (parts[0].equals("HEARTBEAT")) {
+            int senderId = Integer.parseInt(parts[1]);
+            
+            // Ignorar próprio heartbeat
+            if (senderId == this.serverId) return;
+            
+            int senderClientPort = Integer.parseInt(parts[2]);
+            int senderServerPort = Integer.parseInt(parts[3]);
+            boolean senderIsCoord = Boolean.parseBoolean(parts[4]);
+            int senderClock = Integer.parseInt(parts[5]);
+            
+            updateClock(senderClock);
+            
+            // Atualizar informações do servidor
+            lastHeartbeat.put(senderId, System.currentTimeMillis());
+            
+            ServerInfo info = activeServers.get(senderId);
+            if (info == null) {
+                info = new ServerInfo(senderId, from.getHostAddress(), 
+                    senderClientPort, senderServerPort);
+                activeServers.put(senderId, info);
+                log("Novo servidor descoberto: #" + senderId + " em " + from.getHostAddress());
+                
+                // Conectar ao novo servidor
+                connectToServer(senderId, from.getHostAddress(), senderServerPort);
+                
+                // Se não temos coordenador e o novo servidor é coordenador
+                if (coordinatorId == -1 && senderIsCoord) {
+                    coordinatorId = senderId;
+                    updateCoordLabel();
+                    
+                    // Solicitar estado atual se houver jogo ativo
+                    requestStateSync();
+                }
+                
+                updateServerCount();
+            } else {
+                info.lastSeen = System.currentTimeMillis();
+            }
+            
+            // Atualizar status do coordenador
+            if (senderIsCoord && coordinatorId != senderId) {
+                coordinatorId = senderId;
+                isCoordinator = false;
+                updateCoordLabel();
+            }
+        } else if (parts[0].equals("STATE_REQUEST")) {
+            int requesterId = Integer.parseInt(parts[1]);
+            updateClock(Integer.parseInt(parts[2]));
+            if (isCoordinator) {
+                sendStateSyncTo(requesterId);
+            }
+        } else if (parts[0].equals("COORDINATOR_ANNOUNCE")) {
+            int newCoordId = Integer.parseInt(parts[1]);
+            int clock = Integer.parseInt(parts[2]);
+            updateClock(clock);
+            coordinatorId = newCoordId;
+            isCoordinator = (newCoordId == serverId);
+            updateCoordLabel();
+            log("Coordenador anunciado via Multicast: #" + newCoordId);
+        }
+    }
+    
+    private void requestStateSync() {
+        if (coordinatorId != -1 && coordinatorId != serverId) {
+            try {
+                incrementClock();
+                String message = "STATE_REQUEST|" + serverId + "|" + lamportClock;
+                byte[] buffer = message.getBytes();
+                DatagramPacket packet = new DatagramPacket(
+                    buffer, buffer.length, multicastGroup, MULTICAST_PORT);
+                multicastSocket.send(packet);
+                log("Solicitando sincronização de estado do coordenador #" + coordinatorId);
+            } catch (IOException e) {
+                log("Erro solicitando estado: " + e.getMessage());
+            }
+        }
+    }
+    
+    private void sendStateSyncTo(int targetId) {
+        ServerConnection conn = servers.get(targetId);
+        if (conn != null) {
+            incrementClock();
+            
+            // Enviar estado do jogo
+            String gameState = String.format("STATE_SYNC|%b|%d|%d",
+                gameActive, currentQuestionIndex, lamportClock);
+            conn.sendMessage(gameState);
+            
+            // Enviar scoreboard
+            for (Map.Entry<String, Integer> entry : globalScoreboard.entrySet()) {
+                conn.sendMessage("SCORE_SYNC|" + entry.getKey() + "|" + entry.getValue());
+            }
+            
+            log("Estado sincronizado para servidor #" + targetId);
+        }
+    }
+    
+    // ==================== SERVER MANAGEMENT ====================
     
     private void startServer() {
         // Thread para aceitar clientes
@@ -148,48 +421,83 @@ public class DistributedQuizServer extends JFrame {
             try {
                 clientListener = new ServerSocket(clientPort);
                 log("Escutando clientes na porta " + clientPort);
-                while (true) {
+                while (running) {
                     Socket socket = clientListener.accept();
                     ClientHandler handler = new ClientHandler(socket);
                     new Thread(handler).start();
                 }
             } catch (IOException e) {
-                log("Erro no listener de clientes: " + e.getMessage());
+                if (running) {
+                    log("Erro no listener de clientes: " + e.getMessage());
+                }
             }
-        }).start();
+        }, "ClientListener").start();
         
         // Thread para aceitar outros servidores
         new Thread(() -> {
             try {
                 serverListener = new ServerSocket(serverPort);
                 log("Escutando servidores na porta " + serverPort);
-                while (true) {
+                while (running) {
                     Socket socket = serverListener.accept();
-                    handleServerConnection(socket);
+                    handleIncomingServerConnection(socket);
                 }
             } catch (IOException e) {
-                log("Erro no listener de servidores: " + e.getMessage());
+                if (running) {
+                    log("Erro no listener de servidores: " + e.getMessage());
+                }
             }
-        }).start();
-        
-        // Socket UDP para broadcasts
+        }, "ServerListener").start();
+    }
+    
+    private void handleIncomingServerConnection(Socket socket) {
+        log("Servidor conectou de: " + socket.getRemoteSocketAddress());
+        // A identificação será feita via mensagem HELLO
         new Thread(() -> {
             try {
-                udpSocket = new DatagramSocket(serverPort + 1000);
-                log("UDP inicializado na porta " + (serverPort + 1000));
-                while (true) {
-                    byte[] buffer = new byte[2048];
-                    DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
-                    udpSocket.receive(packet);
-                    String msg = new String(packet.getData(), 0, packet.getLength());
-                    processUDPMessage(msg, packet.getAddress());
+                BufferedReader in = new BufferedReader(
+                    new InputStreamReader(socket.getInputStream()));
+                String hello = in.readLine();
+                
+                if (hello != null && hello.startsWith("HELLO|")) {
+                    String[] parts = hello.split("\\|");
+                    int otherId = Integer.parseInt(parts[1]);
+                    
+                    ServerConnection conn = new ServerConnection(socket, otherId);
+                    servers.put(otherId, conn);
+                    new Thread(conn).start();
+                    
+                    log("Servidor #" + otherId + " identificado e conectado");
                 }
             } catch (IOException e) {
-                log("Erro no UDP: " + e.getMessage());
+                log("Erro processando conexão de servidor: " + e.getMessage());
             }
         }).start();
+    }
+    
+    private void connectToServer(int otherId, String address, int port) {
+        // Evitar conexões duplicadas
+        if (servers.containsKey(otherId)) return;
         
-        statusLabel.setText("Status: Aguardando outros servidores...");
+        new Thread(() -> {
+            try {
+                Thread.sleep(500); // Pequeno delay
+                Socket socket = new Socket(address, port);
+                
+                // Enviar HELLO primeiro
+                PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
+                out.println("HELLO|" + serverId + "|" + clientPort + "|" + serverPort);
+                
+                ServerConnection conn = new ServerConnection(socket, otherId);
+                servers.put(otherId, conn);
+                new Thread(conn).start();
+                
+                log("Conectado ao servidor #" + otherId);
+                
+            } catch (Exception e) {
+                log("Erro conectando ao servidor #" + otherId + ": " + e.getMessage());
+            }
+        }).start();
     }
     
     // ==================== ELEIÇÃO BULLY ====================
@@ -199,7 +507,7 @@ public class DistributedQuizServer extends JFrame {
         incrementClock();
         
         boolean sentElection = false;
-        for (Integer otherId : serverAddresses.keySet()) {
+        for (Integer otherId : activeServers.keySet()) {
             if (otherId > serverId) {
                 sendToServer(otherId, "ELECTION|" + serverId + "|" + lamportClock);
                 sentElection = true;
@@ -207,15 +515,14 @@ public class DistributedQuizServer extends JFrame {
         }
         
         if (!sentElection) {
-            // Sou o maior ID, me torno coordenador
+            // Sou o maior ID ativo
             becomeCoordinator();
         } else {
-            // Aguardar resposta OK por 2 segundos
+            // Aguardar resposta OK por 3 segundos
             new Thread(() -> {
                 try {
-                    Thread.sleep(2000);
-                    // Se nenhum OK foi recebido, me torno coordenador
-                    if (!isCoordinator && coordinatorId != serverId) {
+                    Thread.sleep(3000);
+                    if (!isCoordinator && (coordinatorId == -1 || coordinatorId == serverId)) {
                         becomeCoordinator();
                     }
                 } catch (InterruptedException e) {
@@ -231,12 +538,27 @@ public class DistributedQuizServer extends JFrame {
         coordinatorId = serverId;
         updateCoordLabel();
         
-        // Anunciar para todos os servidores com ID menor
-        for (Integer otherId : serverAddresses.keySet()) {
+        // Anunciar via Multicast
+        try {
+            incrementClock();
+            String message = "COORDINATOR_ANNOUNCE|" + serverId + "|" + lamportClock;
+            byte[] buffer = message.getBytes();
+            DatagramPacket packet = new DatagramPacket(
+                buffer, buffer.length, multicastGroup, MULTICAST_PORT);
+            multicastSocket.send(packet);
+            log("Coordenador anunciado via Multicast");
+        } catch (IOException e) {
+            log("Erro anunciando coordenador: " + e.getMessage());
+        }
+        
+        // Enviar para servidores via TCP também
+        for (Integer otherId : activeServers.keySet()) {
             sendToServer(otherId, "COORDINATOR|" + serverId + "|" + lamportClock);
         }
         
-        startGameButton.setEnabled(clients.size() > 0);
+        SwingUtilities.invokeLater(() -> {
+            startGameButton.setEnabled(clients.size() > 0 && !gameActive);
+        });
     }
     
     // ==================== RICART-AGRAWALA ====================
@@ -251,28 +573,29 @@ public class DistributedQuizServer extends JFrame {
                 
                 log("Solicitando CS com timestamp " + requestTimestamp);
                 
-                // Enviar REQUEST para todos os servidores
-                for (Integer otherId : serverAddresses.keySet()) {
+                // Enviar REQUEST para todos os servidores ativos
+                for (Integer otherId : activeServers.keySet()) {
                     sendToServer(otherId, "CS_REQUEST|" + serverId + "|" + requestTimestamp);
                 }
                 
                 // Aguardar REPLY de todos
                 int timeout = 0;
-                while (replyReceived.size() < serverAddresses.size() && timeout < 50) {
+                while (replyReceived.size() < activeServers.size() && timeout < 50) {
                     Thread.sleep(100);
                     timeout++;
                 }
                 
-                if (replyReceived.size() == serverAddresses.size()) {
+                if (replyReceived.size() == activeServers.size() || activeServers.isEmpty()) {
                     log("CS concedida! Executando seção crítica...");
                     criticalSection.run();
                 } else {
-                    log("Timeout aguardando CS replies");
+                    log("Timeout aguardando CS replies (" + 
+                        replyReceived.size() + "/" + activeServers.size() + ")");
+                    // Executar mesmo assim se timeout
+                    criticalSection.run();
                 }
                 
                 requestingCS = false;
-                
-                // Processar requisições enfileiradas
                 processQueuedRequests();
                 
             } catch (InterruptedException e) {
@@ -296,7 +619,7 @@ public class DistributedQuizServer extends JFrame {
         incrementClock();
         String message = "REPLICATE|" + action + "|" + data + "|" + lamportClock;
         
-        for (Integer otherId : serverAddresses.keySet()) {
+        for (Integer otherId : activeServers.keySet()) {
             sendToServer(otherId, message);
         }
     }
@@ -311,37 +634,6 @@ public class DistributedQuizServer extends JFrame {
     
     // ==================== COMUNICAÇÃO ENTRE SERVIDORES ====================
     
-    public void connectToServer(int otherId, String address, int port) {
-        serverAddresses.put(otherId, address + ":" + port);
-        
-        new Thread(() -> {
-            try {
-                Thread.sleep(500); // Dar tempo para o outro servidor iniciar
-                Socket socket = new Socket(address, port);
-                ServerConnection conn = new ServerConnection(socket, otherId);
-                servers.put(otherId, conn);
-                new Thread(conn).start();
-                
-                // Enviar apresentação
-                sendToServer(otherId, "HELLO|" + serverId + "|" + clientPort + "|" + serverPort);
-                log("Conectado ao servidor #" + otherId);
-                
-                // Iniciar eleição após conectar
-                if (servers.size() == serverAddresses.size()) {
-                    Thread.sleep(1000);
-                    startElection();
-                }
-            } catch (Exception e) {
-                log("Erro conectando ao servidor #" + otherId + ": " + e.getMessage());
-            }
-        }).start();
-    }
-    
-    private void handleServerConnection(Socket socket) {
-        log("Servidor conectou: " + socket.getRemoteSocketAddress());
-        // A identificação será feita via mensagem HELLO
-    }
-    
     private void sendToServer(int serverId, String message) {
         ServerConnection conn = servers.get(serverId);
         if (conn != null) {
@@ -355,15 +647,12 @@ public class DistributedQuizServer extends JFrame {
         }
     }
     
-    private void processUDPMessage(String message, InetAddress from) {
-        // Implementar se necessário para descoberta de servidores
-    }
-    
     // ==================== LÓGICA DO JOGO ====================
     
     private void initiateGameStart() {
         if (!isCoordinator) {
-            JOptionPane.showMessageDialog(this, "Apenas o coordenador pode iniciar o jogo!");
+            JOptionPane.showMessageDialog(this, 
+                "Apenas o coordenador pode iniciar o jogo!");
             return;
         }
         
@@ -392,7 +681,7 @@ public class DistributedQuizServer extends JFrame {
         log("Pergunta " + (currentQuestionIndex + 1) + " enviada");
         
         // Timer de 15 segundos
-        new java.util.Timer().schedule(new java.util.TimerTask() {
+        new Timer().schedule(new TimerTask() {
             @Override
             public void run() {
                 processQuestionEnd();
@@ -414,7 +703,7 @@ public class DistributedQuizServer extends JFrame {
         
         sendScoreboardToClients();
         
-        new java.util.Timer().schedule(new java.util.TimerTask() {
+        new Timer().schedule(new TimerTask() {
             @Override
             public void run() {
                 currentQuestionIndex++;
@@ -428,13 +717,15 @@ public class DistributedQuizServer extends JFrame {
         broadcastToClients("GAME_END");
         replicateGameState("GAME_END", "");
         log("Jogo finalizado!");
-        startGameButton.setEnabled(true);
+        SwingUtilities.invokeLater(() -> {
+            startGameButton.setEnabled(isCoordinator && clients.size() > 0);
+        });
     }
     
     private void sendScoreboardToClients() {
         StringBuilder sb = new StringBuilder("SCOREBOARD");
         
-        java.util.List<Map.Entry<String, Integer>> sorted = new ArrayList<>(globalScoreboard.entrySet());
+        List<Map.Entry<String, Integer>> sorted = new ArrayList<>(globalScoreboard.entrySet());
         sorted.sort((a, b) -> b.getValue().compareTo(a.getValue()));
         
         for (Map.Entry<String, Integer> entry : sorted) {
@@ -475,6 +766,7 @@ public class DistributedQuizServer extends JFrame {
         private int otherId;
         private BufferedReader in;
         private PrintWriter out;
+        private volatile boolean active = true;
         
         public ServerConnection(Socket socket, int otherId) {
             this.socket = socket;
@@ -491,17 +783,28 @@ public class DistributedQuizServer extends JFrame {
         public void run() {
             try {
                 String line;
-                while ((line = in.readLine()) != null) {
+                while (active && (line = in.readLine()) != null) {
                     processServerMessage(line, otherId);
                 }
             } catch (IOException e) {
-                log("Servidor #" + otherId + " desconectou");
+                if (active) {
+                    log("Conexão TCP com servidor #" + otherId + " perdida");
+                }
             }
         }
         
         public void sendMessage(String msg) {
-            if (out != null) {
+            if (out != null && active) {
                 out.println(msg);
+            }
+        }
+        
+        public void close() {
+            active = false;
+            try {
+                if (socket != null) socket.close();
+            } catch (IOException e) {
+                // Ignore
             }
         }
     }
@@ -513,11 +816,8 @@ public class DistributedQuizServer extends JFrame {
         switch (type) {
             case "HELLO":
                 int senderId = Integer.parseInt(parts[1]);
-                if (!servers.containsKey(senderId)) {
-                    // Conexão reversa foi estabelecida
-                    log("Servidor #" + senderId + " identificado");
-                }
                 updateClock(Integer.parseInt(parts[3]));
+                log("Servidor #" + senderId + " identificado via TCP");
                 break;
                 
             case "ELECTION":
@@ -538,7 +838,7 @@ public class DistributedQuizServer extends JFrame {
                 updateClock(Integer.parseInt(parts[2]));
                 coordinatorId = Integer.parseInt(parts[1]);
                 isCoordinator = (coordinatorId == serverId);
-                log("Novo coordenador: #" + coordinatorId);
+                log("Novo coordenador via TCP: #" + coordinatorId);
                 updateCoordLabel();
                 break;
                 
@@ -568,6 +868,19 @@ public class DistributedQuizServer extends JFrame {
                 String data = parts[2];
                 handleReplication(action, data);
                 break;
+                
+            case "STATE_SYNC":
+                updateClock(Integer.parseInt(parts[4]));
+                gameActive = Boolean.parseBoolean(parts[1]);
+                currentQuestionIndex = Integer.parseInt(parts[2]);
+                log("Estado do jogo sincronizado");
+                break;
+                
+            case "SCORE_SYNC":
+                String playerName = parts[1];
+                int score = Integer.parseInt(parts[2]);
+                globalScoreboard.put(playerName, score);
+                break;
         }
     }
     
@@ -593,6 +906,12 @@ public class DistributedQuizServer extends JFrame {
             case "GAME_END":
                 gameActive = false;
                 log("Jogo replicado: finalizado");
+                break;
+                
+            case "PLAYER_JOIN":
+                if (!globalScoreboard.containsKey(data)) {
+                    globalScoreboard.put(data, 0);
+                }
                 break;
         }
     }
@@ -640,11 +959,30 @@ public class DistributedQuizServer extends JFrame {
                 case "JOIN":
                     playerName = parts[1];
                     clients.put(clientId, this);
-                    sendMessage("JOINED|" + playerName);
-                    globalScoreboard.put(playerName, 0);
-                    log("Jogador conectou: " + playerName);
+                    sendMessage("JOINED|" + playerName + "|" + serverId);
+                    
+                    // Restaurar pontuação se jogador já existia
+                    if (globalScoreboard.containsKey(playerName)) {
+                        score = globalScoreboard.get(playerName);
+                        log("Jogador reconectou: " + playerName + " (Score: " + score + ")");
+                    } else {
+                        globalScoreboard.put(playerName, 0);
+                        log("Novo jogador: " + playerName);
+                    }
+                    
                     updatePlayerCount();
                     replicateGameState("PLAYER_JOIN", playerName);
+                    
+                    // Enviar estado atual se jogo ativo
+                    if (gameActive && currentQuestionIndex < questions.size()) {
+                        Question q = questions.get(currentQuestionIndex);
+                        String questionData = "QUESTION|" + q.question + "|" + 
+                                              String.join("|", q.options);
+                        sendMessage(questionData);
+                    }
+                    
+                    // Enviar scoreboard atual
+                    sendScoreboardToClients();
                     break;
                     
                 case "ANSWER":
@@ -670,6 +1008,22 @@ public class DistributedQuizServer extends JFrame {
     }
     
     // ==================== CLASSES AUXILIARES ====================
+    
+    private static class ServerInfo {
+        int id;
+        String address;
+        int clientPort;
+        int serverPort;
+        long lastSeen;
+        
+        ServerInfo(int id, String addr, int cPort, int sPort) {
+            this.id = id;
+            this.address = addr;
+            this.clientPort = cPort;
+            this.serverPort = sPort;
+            this.lastSeen = System.currentTimeMillis();
+        }
+    }
     
     private static class Question {
         String question;
@@ -707,6 +1061,7 @@ public class DistributedQuizServer extends JFrame {
         SwingUtilities.invokeLater(() -> {
             String status = isCoordinator ? " (EU)" : "";
             coordLabel.setText("Coordenador: Servidor #" + coordinatorId + status);
+            coordLabel.setForeground(isCoordinator ? new Color(0, 150, 0) : Color.BLACK);
         });
     }
     
@@ -714,107 +1069,87 @@ public class DistributedQuizServer extends JFrame {
         SwingUtilities.invokeLater(() -> {
             playersLabel.setText("Jogadores: " + clients.size());
             if (isCoordinator) {
-                startGameButton.setEnabled(clients.size() > 0);
+                startGameButton.setEnabled(clients.size() > 0 && !gameActive);
             }
+        });
+    }
+    
+    private void updateServerCount() {
+        SwingUtilities.invokeLater(() -> {
+            serversLabel.setText("Servidores Ativos: " + (activeServers.size() + 1));
         });
     }
     
     private void log(String message) {
         SwingUtilities.invokeLater(() -> {
-            logArea.append("[" + new Date() + "] " + message + "\n");
+            String timestamp = new java.text.SimpleDateFormat("HH:mm:ss").format(new Date());
+            logArea.append("[" + timestamp + "] " + message + "\n");
             logArea.setCaretPosition(logArea.getDocument().getLength());
         });
+    }
+    
+    // ==================== SHUTDOWN ====================
+    
+    private void shutdown() {
+        log("Encerrando servidor...");
+        running = false;
+        if (heartbeatTimer != null) heartbeatTimer.cancel();
+        if (failureDetectionTimer != null) failureDetectionTimer.cancel();
+        
+        try {
+            if (multicastSocket != null) {
+                NetworkInterface netIf = NetworkInterface.getByInetAddress(InetAddress.getLocalHost());
+                if (netIf == null) {
+                    netIf = NetworkInterface.getNetworkInterfaces().nextElement();
+                }
+                multicastSocket.leaveGroup(
+                    new InetSocketAddress(multicastGroup, MULTICAST_PORT), netIf);
+                multicastSocket.close();
+            }
+            if (clientListener != null) clientListener.close();
+            if (serverListener != null) serverListener.close();
+        } catch (IOException e) {
+            // Ignore
+        }
     }
     
     // ==================== MAIN ====================
     
     public static void main(String[] args) {
-        // First, try to get configuration from command-line args or stdin (for scripts).
-        // If none provided, fall back to interactive JOptionPane dialogs.
-        String config = null;
-        String connections = null;
-
-        // If args are provided as: serverId clientPort serverPort [connections]
-        if (args != null && args.length >= 3) {
-            config = args[0] + "," + args[1] + "," + args[2];
-            if (args.length >= 4) connections = args[3];
-        } else {
-            // Try to read two lines from stdin (config then connections)
-            try (BufferedReader br = new BufferedReader(new InputStreamReader(System.in))) {
-                if (br.ready()) {
-                    config = br.readLine();
-                    connections = br.readLine();
-                }
-            } catch (IOException e) {
-                // ignore and fall back to dialogs
-            }
-        }
-
-        final String cfg = config;
-        final String conns = connections;
-
         SwingUtilities.invokeLater(() -> {
-            if (cfg != null && !cfg.isEmpty()) {
-                String[] parts = cfg.split(",");
-                int serverId = Integer.parseInt(parts[0].trim());
-                int clientPort = Integer.parseInt(parts[1].trim());
-                int serverPort = Integer.parseInt(parts[2].trim());
-
-                DistributedQuizServer server = new DistributedQuizServer(serverId, clientPort, serverPort);
-
-                if (conns != null && !conns.isEmpty()) {
-                    for (String conn : conns.split(";")) {
-                        if (conn.trim().isEmpty()) continue;
-                        String[] connParts = conn.split(":");
-                        try {
-                            int otherId = Integer.parseInt(connParts[0]);
-                            String host = connParts[1];
-                            int port = Integer.parseInt(connParts[2]);
-                            server.connectToServer(otherId, host, port);
-                        } catch (Exception e) {
-                            // ignore malformed entries
-                        }
-                    }
-                }
+            String config = null;
+            
+            // Se argumentos foram passados via linha de comando
+            if (args != null && args.length >= 3) {
+                config = args[0] + "," + args[1] + "," + args[2];
             } else {
-                // Interactive fallback (original behavior)
-                String cfgDlg = JOptionPane.showInputDialog(
+                // Caso contrário, mostrar diálogo
+                config = JOptionPane.showInputDialog(
                     "Configuração do servidor:\n" +
                     "Formato: serverID,clientPort,serverPort\n" +
                     "Exemplos:\n" +
                     "  Servidor 1: 1,5001,6001\n" +
                     "  Servidor 2: 2,5002,6002\n" +
-                    "  Servidor 3: 3,5003,6003",
+                    "  Servidor 3: 3,5003,6003\n\n" +
+                    "NOTA: Descoberta automática via Multicast ativada!",
                     "1,5001,6001"
                 );
-
-                if (cfgDlg == null) return;
-
-                String[] parts = cfgDlg.split(",");
-                int serverId = Integer.parseInt(parts[0].trim());
-                int clientPort = Integer.parseInt(parts[1].trim());
-                int serverPort = Integer.parseInt(parts[2].trim());
-
-                DistributedQuizServer server = new DistributedQuizServer(serverId, clientPort, serverPort);
-
-                // Configurar conexões com outros servidores
-                String connsDlg = JOptionPane.showInputDialog(
-                    "Conectar a outros servidores:\n" +
-                    "Formato: id:host:porta;id:host:porta;...\n" +
-                    "Exemplo: 2:localhost:6002;3:localhost:6003\n" +
-                    "Deixe vazio se for o primeiro servidor"
-                );
-
-                if (connsDlg != null && !connsDlg.isEmpty()) {
-                    for (String conn : connsDlg.split(";")) {
-                        String[] connParts = conn.split(":");
-                        int otherId = Integer.parseInt(connParts[0]);
-                        String host = connParts[1];
-                        int port = Integer.parseInt(connParts[2]);
-                        server.connectToServer(otherId, host, port);
-                    }
-                }
             }
+            
+            if (config == null || config.trim().isEmpty()) return;
+            
+            String[] parts = config.split(",");
+            int serverId = Integer.parseInt(parts[0].trim());
+            int clientPort = Integer.parseInt(parts[1].trim());
+            int serverPort = Integer.parseInt(parts[2].trim());
+            
+            DistributedQuizServer server = new DistributedQuizServer(
+                serverId, clientPort, serverPort);
+            
+            // Adicionar shutdown hook
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                server.shutdown();
+            }));
         });
     }
 }

@@ -74,6 +74,19 @@ public class DistributedQuizServer extends JFrame {
     private int requestTimestamp = 0;
     private final Set<Integer> replyReceived = ConcurrentHashMap.newKeySet();
     
+    // Correção 1: Race condition na eleição
+    private final Object electionLock = new Object();
+    private volatile boolean electionInProgress = false;
+    
+    // Correção 2: Timer gerenciado
+    private Timer currentQuestionTimer = null;
+    
+    // Correção 4: Estado da pergunta atual
+    private QuestionState currentQuestionState = null;
+    
+    // Correção 5: Scoreboard sincronizado
+    private final Object scoreboardLock = new Object();
+    
     // GUI
     private JTextArea logArea;
     private JLabel statusLabel;
@@ -193,6 +206,33 @@ public class DistributedQuizServer extends JFrame {
     
     // ==================== MULTICAST DISCOVERY ====================
     
+    // Correção 6: NetworkInterface seguro
+    private NetworkInterface getSafeNetworkInterface() {
+        try {
+            NetworkInterface netIf = NetworkInterface.getByInetAddress(InetAddress.getLocalHost());
+            if (netIf != null && netIf.isUp() && netIf.supportsMulticast()) {
+                return netIf;
+            }
+        } catch (Exception e) {
+            log("Erro obtendo interface local: " + e.getMessage());
+        }
+        
+        // Fallback: procurar primeira interface válida
+        try {
+            java.util.Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces.hasMoreElements()) {
+                NetworkInterface netIf = interfaces.nextElement();
+                if (netIf.isUp() && netIf.supportsMulticast() && !netIf.isLoopback()) {
+                    return netIf;
+                }
+            }
+        } catch (Exception e) {
+            log("Erro procurando interface alternativa: " + e.getMessage());
+        }
+        
+        return null;
+    }
+    
     private void startMulticastDiscovery() {
         new Thread(() -> {
             try {
@@ -200,9 +240,10 @@ public class DistributedQuizServer extends JFrame {
                 multicastSocket = new MulticastSocket(MULTICAST_PORT);
                 
                 // Join multicast group
-                NetworkInterface netIf = NetworkInterface.getByInetAddress(InetAddress.getLocalHost());
+                NetworkInterface netIf = getSafeNetworkInterface();
                 if (netIf == null) {
-                    netIf = NetworkInterface.getNetworkInterfaces().nextElement();
+                    log("ERRO: Nenhuma interface de rede válida encontrada!");
+                    return;
                 }
                 
                 multicastSocket.joinGroup(new InetSocketAddress(multicastGroup, MULTICAST_PORT), netIf);
@@ -238,6 +279,11 @@ public class DistributedQuizServer extends JFrame {
     }
     
     private void sendHeartbeat() {
+        // Correção 7: Validar multicast socket
+        if (multicastSocket == null || multicastSocket.isClosed()) {
+            return;
+        }
+        
         try {
             incrementClock();
             String message = String.format("HEARTBEAT|%d|%d|%d|%b|%d",
@@ -503,32 +549,50 @@ public class DistributedQuizServer extends JFrame {
     // ==================== ELEIÇÃO BULLY ====================
     
     private void startElection() {
-        log("=== INICIANDO ELEIÇÃO BULLY ===");
-        incrementClock();
-        
-        boolean sentElection = false;
-        for (Integer otherId : activeServers.keySet()) {
-            if (otherId > serverId) {
-                sendToServer(otherId, "ELECTION|" + serverId + "|" + lamportClock);
-                sentElection = true;
+        // Correção 1: Prevenir race condition na eleição
+        synchronized (electionLock) {
+            if (electionInProgress) {
+                log("Eleição já em andamento, ignorando nova solicitação");
+                return;
             }
+            electionInProgress = true;
         }
         
-        if (!sentElection) {
-            // Sou o maior ID ativo
-            becomeCoordinator();
-        } else {
-            // Aguardar resposta OK por 3 segundos
-            new Thread(() -> {
-                try {
-                    Thread.sleep(3000);
-                    if (!isCoordinator && (coordinatorId == -1 || coordinatorId == serverId)) {
-                        becomeCoordinator();
-                    }
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
+        try {
+            log("=== INICIANDO ELEIÇÃO BULLY ===");
+            incrementClock();
+            
+            boolean sentElection = false;
+            for (Integer otherId : activeServers.keySet()) {
+                if (otherId > serverId) {
+                    sendToServer(otherId, "ELECTION|" + serverId + "|" + lamportClock);
+                    sentElection = true;
                 }
-            }).start();
+            }
+            
+            if (!sentElection) {
+                // Sou o maior ID ativo
+                becomeCoordinator();
+            } else {
+                // Aguardar resposta OK por 3 segundos
+                new Thread(() -> {
+                    try {
+                        Thread.sleep(3000);
+                        synchronized (electionLock) {
+                            if (!isCoordinator && (coordinatorId == -1 || coordinatorId == serverId)) {
+                                becomeCoordinator();
+                            }
+                            electionInProgress = false;
+                        }
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }).start();
+            }
+        } finally {
+            if (!electionInProgress) {
+                // Já resolvido no bloco acima
+            }
         }
     }
     
@@ -537,6 +601,11 @@ public class DistributedQuizServer extends JFrame {
         isCoordinator = true;
         coordinatorId = serverId;
         updateCoordLabel();
+        
+        // Marcar eleição como concluída
+        synchronized (electionLock) {
+            electionInProgress = false;
+        }
         
         // Anunciar via Multicast
         try {
@@ -569,6 +638,15 @@ public class DistributedQuizServer extends JFrame {
             log("=== RESUMINDO JOGO COMO NOVO COORDENADOR ===");
             log("Questão atual: " + currentQuestionIndex);
             
+            // Cancelar timer anterior se existir
+            if (currentQuestionTimer != null) {
+                currentQuestionTimer.cancel();
+                currentQuestionTimer = null;
+            }
+            
+            // Criar novo estado para a questão atual
+            currentQuestionState = new QuestionState();
+            
             // Resetar respostas de todos os clientes para a questão atual
             for (ClientHandler client : clients.values()) {
                 client.resetAnswer();
@@ -583,7 +661,8 @@ public class DistributedQuizServer extends JFrame {
             log("Questão " + (currentQuestionIndex + 1) + " reenviada aos clientes");
             
             // Reiniciar o timer de 15 segundos para esta questão
-            new Timer().schedule(new TimerTask() {
+            currentQuestionTimer = new Timer();
+            currentQuestionTimer.schedule(new TimerTask() {
                 @Override
                 public void run() {
                     if (isCoordinator && gameActive) {
@@ -710,6 +789,15 @@ public class DistributedQuizServer extends JFrame {
             return;
         }
         
+        // Cancelar timer anterior se existir
+        if (currentQuestionTimer != null) {
+            currentQuestionTimer.cancel();
+            currentQuestionTimer = null;
+        }
+        
+        // Criar novo estado para a questão atual
+        currentQuestionState = new QuestionState();
+        
         Question q = questions.get(currentQuestionIndex);
         String questionData = "QUESTION|" + q.question + "|" + 
                               String.join("|", q.options);
@@ -720,7 +808,8 @@ public class DistributedQuizServer extends JFrame {
         log("Pergunta " + (currentQuestionIndex + 1) + " enviada aos " + clients.size() + " clientes");
         
         // Timer de 15 segundos
-        new Timer().schedule(new TimerTask() {
+        currentQuestionTimer = new Timer();
+        currentQuestionTimer.schedule(new TimerTask() {
             @Override
             public void run() {
                 if (isCoordinator) {
@@ -737,7 +826,8 @@ public class DistributedQuizServer extends JFrame {
             if (client.hasAnswered() && client.getLastAnswer() == q.correctAnswer) {
                 int points = 100;
                 client.addPoints(points);
-                syncScoreboard(client.getPlayerName(), client.getScore());
+                // Usar método sincronizado para atualizar scoreboard global
+                updatePlayerScore(client.getPlayerName(), points);
             }
             client.resetAnswer();
         }
@@ -751,6 +841,18 @@ public class DistributedQuizServer extends JFrame {
                 sendNextQuestion();
             }
         }, 3000);
+    }
+    
+    
+    private void updatePlayerScore(String playerName, int pointsToAdd) {
+        synchronized (scoreboardLock) {
+            int currentScore = globalScoreboard.getOrDefault(playerName, 0);
+            int newScore = currentScore + pointsToAdd;
+            globalScoreboard.put(playerName, newScore);
+            // Replicar atualização para outros servidores
+            replicateGameState("SCORE_UPDATE", playerName + ":" + newScore);
+            log("Score atualizado: " + playerName + " = " + newScore + " pontos");
+        }
     }
     
     private void endGame() {
@@ -1009,7 +1111,7 @@ public class DistributedQuizServer extends JFrame {
                         }
                     }
                     
-                    // Se já existe, remover a conexão antiga
+                    // Se já existe, fechar socket antigo e remover a conexão antiga
                     if (existingClient != null) {
                         String oldId = null;
                         for (Map.Entry<String, ClientHandler> entry : clients.entrySet()) {
@@ -1019,7 +1121,13 @@ public class DistributedQuizServer extends JFrame {
                             }
                         }
                         if (oldId != null) {
+                            try {
+                                existingClient.socket.close();
+                            } catch (IOException e) {
+                                // Ignora erro ao fechar socket
+                            }
                             clients.remove(oldId);
+                            log("Conexão anterior de " + playerName + " foi fechada");
                         }
                     }
                     
@@ -1055,6 +1163,10 @@ public class DistributedQuizServer extends JFrame {
                     if (gameActive && !answered) {
                         lastAnswer = Integer.parseInt(parts[1]);
                         answered = true;
+                        // Salvar resposta no estado da questão
+                        if (currentQuestionState != null) {
+                            currentQuestionState.pendingAnswers.put(playerName, lastAnswer);
+                        }
                         log("Resposta de " + playerName + ": " + lastAnswer);
                     }
                     break;
@@ -1074,6 +1186,10 @@ public class DistributedQuizServer extends JFrame {
     }
     
     // ==================== CLASSES AUXILIARES ====================
+    
+    private static class QuestionState {
+        Map<String, Integer> pendingAnswers = new ConcurrentHashMap<>();
+    }
     
     private static class ServerInfo {
         int id;

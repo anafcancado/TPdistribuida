@@ -629,16 +629,16 @@ public class DistributedQuizClient extends JFrame {
         }
         
         questionLabel.setText("<html><div style='text-align: center; padding: 20px;'>" +
-            "Resposta enviada! ✓<br><br>" +
+            "Resposta enviada! <br><br>" +
             "Aguardando outras respostas...</div></html>");
     }
     
     private void displayScoreboard(String[] parts) {
         StringBuilder sb = new StringBuilder();
-        sb.append("╔════════════════════════════╗\n");
-        sb.append("║    PLACAR GLOBAL           ║\n");
-        sb.append("║    (Sincronizado)          ║\n");
-        sb.append("╚════════════════════════════╝\n\n");
+       // sb.append("╔════════════════════════════╗\n");
+        sb.append("    PLACAR GLOBAL           \n");
+        sb.append("    (Sincronizado)          \n");
+       // sb.append("╚════════════════════════════╝\n\n");
         
         for (int i = 1; i < parts.length; i++) {
             String[] playerData = parts[i].split(":");

@@ -152,7 +152,9 @@ public class DistributedQuizServer extends JFrame {
             }
         });
         setLayout(new BorderLayout(0, 0));
-        setMinimumSize(new Dimension(900, 600));
+        // Permitir a janela ser redimensionada mais estreita pelo usuário
+        // Reduzido de 900x600 para 350x300 para permitir 'afinar' a janela
+        setMinimumSize(new Dimension(350, 300));
         
         // Painel superior com informações do servidor
         JPanel topPanel = new JPanel(new BorderLayout());
@@ -172,23 +174,23 @@ public class DistributedQuizServer extends JFrame {
         
         statusLabel = new JLabel("Status: Iniciando...");
         statusLabel.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        statusLabel.setForeground(new Color(97, 97, 97));
+        statusLabel.setForeground(Color.BLACK);
         
         coordLabel = new JLabel("Coordenador: Desconhecido");
         coordLabel.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        coordLabel.setForeground(new Color(97, 97, 97));
+        coordLabel.setForeground(Color.BLACK);
         
         serversLabel = new JLabel("Servidores Ativos: 0");
         serversLabel.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        serversLabel.setForeground(new Color(97, 97, 97));
+        serversLabel.setForeground(Color.BLACK);
         
         playersLabel = new JLabel("Jogadores: 0");
         playersLabel.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        playersLabel.setForeground(new Color(97, 97, 97));
+        playersLabel.setForeground(Color.BLACK);
         
         clockLabel = new JLabel("Relógio Lamport: 0");
         clockLabel.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        clockLabel.setForeground(new Color(97, 97, 97));
+        clockLabel.setForeground(Color.BLACK);
         
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
         buttonPanel.setBackground(new Color(250, 250, 250));
@@ -234,8 +236,8 @@ public class DistributedQuizServer extends JFrame {
         logArea = new JTextArea();
         logArea.setEditable(false);
         logArea.setFont(new Font("Consolas", Font.PLAIN, 12));
-        logArea.setBackground(new Color(30, 30, 30));
-        logArea.setForeground(new Color(0, 255, 0));
+        logArea.setBackground(Color.WHITE);
+        logArea.setForeground(Color.BLACK);
         logArea.setLineWrap(false);
         logArea.setWrapStyleWord(false);
         logArea.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));

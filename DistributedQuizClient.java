@@ -75,6 +75,7 @@ public class DistributedQuizClient extends JFrame {
             }
         });
         setLayout(new CardLayout());
+        setMinimumSize(new Dimension(800, 600));
         
         setupConnectionPanel();
         setupGamePanel();
@@ -84,117 +85,163 @@ public class DistributedQuizClient extends JFrame {
         
         showConnectionPanel();
         
-        pack();
+        setSize(900, 700);
         setLocationRelativeTo(null);
         setVisible(true);
     }
     
     private void setupConnectionPanel() {
-        connectionPanel = new JPanel(new GridBagLayout());
+        connectionPanel = new JPanel(new BorderLayout(0, 0));
+        connectionPanel.setBackground(new Color(250, 250, 250));
+        
+        // Painel central com formulário centralizado
+        JPanel centerWrapper = new JPanel(new GridBagLayout());
+        centerWrapper.setBackground(new Color(250, 250, 250));
+        centerWrapper.setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
+        
+        JPanel formPanel = new JPanel(new GridBagLayout());
+        formPanel.setBackground(Color.WHITE);
+        formPanel.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(new Color(224, 224, 224), 1),
+            BorderFactory.createEmptyBorder(40, 50, 40, 50)
+        ));
+        formPanel.setMaximumSize(new Dimension(500, 600));
+        
         GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(8, 0, 8, 0);
+        gbc.gridx = 0;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.anchor = GridBagConstraints.CENTER;
         
-        connectionPanel.setBackground(new Color(46, 125, 50));
-        
+        // Título
         JLabel titleLabel = new JLabel("Quiz Competitivo Distribuído");
-        titleLabel.setFont(new Font("Arial", Font.BOLD, 24));
-        titleLabel.setForeground(Color.WHITE);
+        titleLabel.setFont(new Font("SansSerif", Font.BOLD, 28));
+        titleLabel.setForeground(new Color(33, 33, 33));
+        titleLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        gbc.gridy = 0;
+        gbc.insets = new Insets(0, 0, 30, 0);
+        formPanel.add(titleLabel, gbc);
         
+        // Status de descoberta
         statusLabel = new JLabel("Procurando servidores via Multicast...");
-        statusLabel.setForeground(Color.YELLOW);
-        statusLabel.setFont(new Font("Arial", Font.BOLD, 14));
+        statusLabel.setForeground(new Color(255, 152, 0));
+        statusLabel.setFont(new Font("SansSerif", Font.PLAIN, 14));
+        statusLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        gbc.gridy = 1;
+        gbc.insets = new Insets(0, 0, 8, 0);
+        formPanel.add(statusLabel, gbc);
         
+        // Label de conexão
         connectionLabel = new JLabel("Aguardando descoberta...");
-        connectionLabel.setForeground(Color.WHITE);
+        connectionLabel.setForeground(new Color(117, 117, 117));
+        connectionLabel.setFont(new Font("SansSerif", Font.PLAIN, 13));
+        connectionLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        gbc.gridy = 2;
+        gbc.insets = new Insets(0, 0, 25, 0);
+        formPanel.add(connectionLabel, gbc);
         
+        // Campo de nome
         JLabel nameLabel = new JLabel("Seu Nome:");
-        nameLabel.setForeground(Color.WHITE);
-        nameLabel.setFont(new Font("Arial", Font.BOLD, 14));
+        nameLabel.setForeground(new Color(66, 66, 66));
+        nameLabel.setFont(new Font("SansSerif", Font.BOLD, 14));
+        gbc.gridy = 3;
+        gbc.insets = new Insets(0, 0, 5, 0);
+        formPanel.add(nameLabel, gbc);
         
         playerNameField = new JTextField(20);
-        playerNameField.setFont(new Font("Arial", Font.PLAIN, 14));
+        playerNameField.setFont(new Font("SansSerif", Font.PLAIN, 15));
+        playerNameField.setPreferredSize(new Dimension(300, 38));
+        playerNameField.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(new Color(189, 189, 189), 1),
+            BorderFactory.createEmptyBorder(8, 12, 8, 12)
+        ));
+        gbc.gridy = 4;
+        gbc.insets = new Insets(0, 0, 20, 0);
+        formPanel.add(playerNameField, gbc);
         
+        // Botão conectar
         connectButton = new JButton("Conectar ao Coordenador");
         connectButton.setEnabled(false);
-        connectButton.setBackground(new Color(76, 175, 80));
+        connectButton.setBackground(new Color(66, 165, 245));
         connectButton.setForeground(Color.WHITE);
-        connectButton.setFont(new Font("Arial", Font.BOLD, 14));
+        connectButton.setFont(new Font("SansSerif", Font.BOLD, 15));
+        connectButton.setPreferredSize(new Dimension(300, 44));
+        connectButton.setBorderPainted(false);
+        connectButton.setFocusPainted(false);
+        connectButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         connectButton.addActionListener(e -> connectToCoordinator());
-        
-        scoreLabel = new JLabel("Pontuação: 0");
-        scoreLabel.setForeground(Color.WHITE);
-        scoreLabel.setFont(new Font("Arial", Font.BOLD, 12));
-        
-        gbc.insets = new Insets(10, 10, 10, 10);
-        gbc.gridx = 0;
-        gbc.gridy = 0;
-        gbc.gridwidth = 2;
-        connectionPanel.add(titleLabel, gbc);
-        
-        gbc.gridy = 1;
-        connectionPanel.add(statusLabel, gbc);
-        
-        gbc.gridy = 2;
-        connectionPanel.add(connectionLabel, gbc);
-        
-        gbc.gridy = 3;
-        gbc.gridwidth = 1;
-        connectionPanel.add(nameLabel, gbc);
-        gbc.gridx = 1;
-        connectionPanel.add(playerNameField, gbc);
-        
-        gbc.gridx = 0;
-        gbc.gridy = 4;
-        gbc.gridwidth = 2;
-        connectionPanel.add(connectButton, gbc);
-        
         gbc.gridy = 5;
-        connectionPanel.add(scoreLabel, gbc);
+        gbc.insets = new Insets(0, 0, 15, 0);
+        formPanel.add(connectButton, gbc);
         
-        // Instruções
+        // Score label
+        scoreLabel = new JLabel("Pontuação: 0");
+        scoreLabel.setForeground(new Color(76, 175, 80));
+        scoreLabel.setFont(new Font("SansSerif", Font.BOLD, 14));
+        scoreLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        gbc.gridy = 6;
+        gbc.insets = new Insets(5, 0, 0, 0);
+        formPanel.add(scoreLabel, gbc);
+        
+        // Adicionar formPanel no centro do wrapper
+        GridBagConstraints wrapperGbc = new GridBagConstraints();
+        wrapperGbc.gridx = 0;
+        wrapperGbc.gridy = 0;
+        wrapperGbc.weightx = 1.0;
+        wrapperGbc.weighty = 1.0;
+        wrapperGbc.anchor = GridBagConstraints.CENTER;
+        centerWrapper.add(formPanel, wrapperGbc);
+        
+        // Painel de instruções no rodapé
+        JPanel footerPanel = new JPanel(new BorderLayout());
+        footerPanel.setBackground(new Color(245, 245, 245));
+        footerPanel.setBorder(BorderFactory.createEmptyBorder(20, 30, 20, 30));
+        
         JTextArea instructions = new JTextArea(
-            "INSTRUÇÕES (Modo Automático):\n\n" +
-            "1. O sistema está procurando servidores automaticamente\n" +
-            "2. Quando um coordenador for encontrado, o botão será habilitado\n" +
-            "3. Digite seu nome e clique em 'Conectar ao Coordenador'\n" +
-            "4. Se a conexão cair, o sistema reconectará automaticamente\n" +
-            "5. Sua pontuação será mantida na reconexão"
+            "INSTRUÇÕES (Modo Automático)\n\n" +
+            "• O sistema está procurando servidores automaticamente\n" +
+            "• Quando um coordenador for encontrado, o botão será habilitado\n" +
+            "• Digite seu nome e clique em 'Conectar ao Coordenador'\n" +
+            "• Se a conexão cair, o sistema reconectará automaticamente\n" +
+            "• Sua pontuação será mantida na reconexão"
         );
         instructions.setEditable(false);
-        instructions.setBackground(new Color(46, 125, 50));
-        instructions.setForeground(Color.WHITE);
-        instructions.setFont(new Font("Arial", Font.PLAIN, 11));
-        instructions.setBorder(BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(Color.WHITE, 1),
-            BorderFactory.createEmptyBorder(10, 10, 10, 10)
-        ));
+        instructions.setLineWrap(true);
+        instructions.setWrapStyleWord(true);
+        instructions.setBackground(new Color(245, 245, 245));
+        instructions.setForeground(new Color(97, 97, 97));
+        instructions.setFont(new Font("SansSerif", Font.PLAIN, 12));
+        instructions.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
         
-        gbc.gridy = 6;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        connectionPanel.add(instructions, gbc);
+        footerPanel.add(instructions, BorderLayout.CENTER);
+        
+        connectionPanel.add(centerWrapper, BorderLayout.CENTER);
+        connectionPanel.add(footerPanel, BorderLayout.SOUTH);
     }
     
     private void setupGamePanel() {
-        gamePanel = new JPanel(new BorderLayout());
-        gamePanel.setBackground(new Color(33, 150, 243));
+        gamePanel = new JPanel(new BorderLayout(0, 0));
+        gamePanel.setBackground(new Color(250, 250, 250));
         
-        // Topo
+        // Topo - Informações do servidor
         JPanel topPanel = new JPanel(new BorderLayout());
-        topPanel.setBackground(new Color(25, 118, 210));
+        topPanel.setBackground(new Color(63, 81, 181));
+        topPanel.setBorder(BorderFactory.createEmptyBorder(15, 20, 15, 20));
         
         JLabel titleLabel = new JLabel("Quiz em Andamento", SwingConstants.CENTER);
-        titleLabel.setFont(new Font("Arial", Font.BOLD, 18));
+        titleLabel.setFont(new Font("SansSerif", Font.BOLD, 20));
         titleLabel.setForeground(Color.WHITE);
         
-        JPanel infoPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
-        infoPanel.setBackground(new Color(25, 118, 210));
+        JPanel infoPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 10, 0));
+        infoPanel.setBackground(new Color(63, 81, 181));
         
         JLabel serverInfoLabel = new JLabel("Servidor Atual: ");
-        serverInfoLabel.setForeground(Color.WHITE);
-        serverInfoLabel.setFont(new Font("Arial", Font.PLAIN, 12));
+        serverInfoLabel.setForeground(new Color(200, 200, 200));
+        serverInfoLabel.setFont(new Font("SansSerif", Font.PLAIN, 13));
         
         JLabel serverIdLabel = new JLabel("#?");
-        serverIdLabel.setForeground(Color.YELLOW);
-        serverIdLabel.setFont(new Font("Arial", Font.BOLD, 12));
+        serverIdLabel.setForeground(new Color(255, 235, 59));
+        serverIdLabel.setFont(new Font("SansSerif", Font.BOLD, 14));
         this.connectionLabel = serverIdLabel;
         
         infoPanel.add(serverInfoLabel);
@@ -203,61 +250,99 @@ public class DistributedQuizClient extends JFrame {
         topPanel.add(titleLabel, BorderLayout.CENTER);
         topPanel.add(infoPanel, BorderLayout.SOUTH);
         
-        // Centro - Pergunta e Respostas
-        JPanel centerPanel = new JPanel(new BorderLayout());
-        centerPanel.setBackground(new Color(33, 150, 243));
+        // Split entre área do jogo (esquerda) e placar (direita)
+        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT);
+        splitPane.setResizeWeight(0.7);
+        splitPane.setDividerSize(8);
+        splitPane.setDividerLocation(600);
+        splitPane.setBorder(null);
         
-        questionLabel = new JLabel("<html><div style='text-align: center;'>Aguardando pergunta...</div></html>");
-        questionLabel.setFont(new Font("Arial", Font.BOLD, 18));
-        questionLabel.setForeground(Color.WHITE);
+        // Centro - Pergunta e Respostas (ÁREA PRINCIPAL)
+        JPanel centerPanel = new JPanel(new BorderLayout(0, 15));
+        centerPanel.setBackground(new Color(250, 250, 250));
+        centerPanel.setBorder(BorderFactory.createEmptyBorder(25, 25, 25, 25));
+        
+        // Pergunta
+        questionLabel = new JLabel("<html><div style='text-align: center; padding: 10px;'>Aguardando pergunta...</div></html>");
+        questionLabel.setFont(new Font("SansSerif", Font.BOLD, 18));
+        questionLabel.setForeground(new Color(33, 33, 33));
         questionLabel.setHorizontalAlignment(SwingConstants.CENTER);
         questionLabel.setBorder(BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(Color.WHITE, 2),
-            BorderFactory.createEmptyBorder(15, 15, 15, 15)
+            BorderFactory.createLineBorder(new Color(189, 189, 189), 2),
+            BorderFactory.createEmptyBorder(20, 20, 20, 20)
         ));
         questionLabel.setOpaque(true);
-        questionLabel.setBackground(new Color(21, 101, 192));
+        questionLabel.setBackground(Color.WHITE);
         
-        // Painel de respostas
-        JPanel answersPanel = new JPanel(new GridLayout(2, 2, 10, 10));
-        answersPanel.setBackground(new Color(240, 240, 240));
-        answersPanel.setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
+        // Painel de respostas com GridLayout responsivo
+        JPanel answersPanel = new JPanel(new GridLayout(2, 2, 15, 15));
+        answersPanel.setBackground(new Color(250, 250, 250));
+        answersPanel.setBorder(BorderFactory.createEmptyBorder(10, 0, 10, 0));
         
         answerButtons = new JButton[4];
         for (int i = 0; i < 4; i++) {
             final int answerIndex = i;
             answerButtons[i] = new JButton("Opção " + (i + 1));
-            answerButtons[i].setFont(new Font("Arial", Font.BOLD, 16));
+            answerButtons[i].setFont(new Font("SansSerif", Font.BOLD, 16));
             answerButtons[i].setBackground(buttonColors[i]);
             answerButtons[i].setForeground(Color.WHITE);
-            answerButtons[i].setPreferredSize(new Dimension(200, 80));
             answerButtons[i].setOpaque(true);
-            answerButtons[i].setContentAreaFilled(true);
             answerButtons[i].setBorderPainted(false);
+            answerButtons[i].setFocusPainted(false);
+            answerButtons[i].setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
             answerButtons[i].addActionListener(e -> selectAnswer(answerIndex));
             answerButtons[i].setEnabled(false);
+            
+            // Hover effect
+            final Color originalColor = buttonColors[i];
+            answerButtons[i].addMouseListener(new java.awt.event.MouseAdapter() {
+                public void mouseEntered(java.awt.event.MouseEvent evt) {
+                    if (answerButtons[answerIndex].isEnabled()) {
+                        answerButtons[answerIndex].setBackground(originalColor.darker());
+                    }
+                }
+                public void mouseExited(java.awt.event.MouseEvent evt) {
+                    answerButtons[answerIndex].setBackground(originalColor);
+                }
+            });
+            
             answersPanel.add(answerButtons[i]);
         }
         
         centerPanel.add(questionLabel, BorderLayout.NORTH);
         centerPanel.add(answersPanel, BorderLayout.CENTER);
         
-        // Placar
-        scoreboardArea = new JTextArea(20, 20);
+        // Painel de Placar (LATERAL DIREITA)
+        JPanel scoreboardPanel = new JPanel(new BorderLayout());
+        scoreboardPanel.setBackground(new Color(245, 245, 245));
+        scoreboardPanel.setBorder(BorderFactory.createEmptyBorder(15, 15, 15, 15));
+        scoreboardPanel.setPreferredSize(new Dimension(280, 500));
+        
+        JLabel scoreboardTitle = new JLabel("Placar Global", SwingConstants.CENTER);
+        scoreboardTitle.setFont(new Font("SansSerif", Font.BOLD, 16));
+        scoreboardTitle.setForeground(new Color(63, 81, 181));
+        scoreboardTitle.setBorder(BorderFactory.createEmptyBorder(0, 0, 10, 0));
+        
+        scoreboardArea = new JTextArea();
         scoreboardArea.setEditable(false);
-        scoreboardArea.setBackground(new Color(48, 63, 159));
-        scoreboardArea.setForeground(Color.WHITE);
-        scoreboardArea.setFont(new Font("Monospaced", Font.BOLD, 13));
+        scoreboardArea.setBackground(Color.WHITE);
+        scoreboardArea.setForeground(new Color(33, 33, 33));
+        scoreboardArea.setFont(new Font("SansSerif", Font.PLAIN, 14));
+        scoreboardArea.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
         
         JScrollPane scoreScrollPane = new JScrollPane(scoreboardArea);
-        scoreScrollPane.setBorder(BorderFactory.createTitledBorder(
-            BorderFactory.createLineBorder(Color.WHITE), "Placar Global",
-            0, 0, new Font("Arial", Font.BOLD, 14), Color.WHITE
-        ));
+        scoreScrollPane.setBorder(BorderFactory.createLineBorder(new Color(224, 224, 224), 1));
+        scoreScrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+        
+        scoreboardPanel.add(scoreboardTitle, BorderLayout.NORTH);
+        scoreboardPanel.add(scoreScrollPane, BorderLayout.CENTER);
+        
+        // Adicionar ao split pane
+        splitPane.setLeftComponent(centerPanel);
+        splitPane.setRightComponent(scoreboardPanel);
         
         gamePanel.add(topPanel, BorderLayout.NORTH);
-        gamePanel.add(centerPanel, BorderLayout.CENTER);
-        gamePanel.add(scoreScrollPane, BorderLayout.EAST);
+        gamePanel.add(splitPane, BorderLayout.CENTER);
     }
     
     // ==================== MULTICAST DISCOVERY ====================
@@ -309,7 +394,7 @@ public class DistributedQuizClient extends JFrame {
                 
                 SwingUtilities.invokeLater(() -> {
                     statusLabel.setText("Coordenador encontrado!");
-                    statusLabel.setForeground(Color.GREEN);
+                    statusLabel.setForeground(new Color(76, 175, 80));
                     connectionLabel.setText("Servidor #" + coordinatorId + " em " + 
                         coordinatorIP + ":" + coordinatorPort);
                     
@@ -328,7 +413,7 @@ public class DistributedQuizClient extends JFrame {
                     log("Coordenador mudou de #" + currentServerId + " para #" + coordinatorId);
                     SwingUtilities.invokeLater(() -> {
                         statusLabel.setText("Mudança de coordenador detectada. Reconectando...");
-                        statusLabel.setForeground(Color.YELLOW);
+                        statusLabel.setForeground(new Color(255, 152, 0));
                     });
                     // Fechar conexão atual e reconectar
                     closeCurrentConnection();
@@ -382,7 +467,7 @@ public class DistributedQuizClient extends JFrame {
                 SwingUtilities.invokeLater(() -> {
                     connected = true;
                     statusLabel.setText("Conectado!");
-                    statusLabel.setForeground(Color.GREEN);
+                    statusLabel.setForeground(new Color(76, 175, 80));
                 });
                 
                 // Thread para escutar mensagens TCP
@@ -544,16 +629,16 @@ public class DistributedQuizClient extends JFrame {
         }
         
         questionLabel.setText("<html><div style='text-align: center; padding: 20px;'>" +
-            "Resposta enviada! ✓<br><br>" +
+            "Resposta enviada! <br><br>" +
             "Aguardando outras respostas...</div></html>");
     }
     
     private void displayScoreboard(String[] parts) {
         StringBuilder sb = new StringBuilder();
-        sb.append("╔════════════════════════════╗\n");
-        sb.append("║    PLACAR GLOBAL           ║\n");
-        sb.append("║    (Sincronizado)          ║\n");
-        sb.append("╚════════════════════════════╝\n\n");
+       // sb.append("╔════════════════════════════╗\n");
+        sb.append("    PLACAR GLOBAL           \n");
+        sb.append("    (Sincronizado)          \n");
+       // sb.append("╚════════════════════════════╝\n\n");
         
         for (int i = 1; i < parts.length; i++) {
             String[] playerData = parts[i].split(":");
